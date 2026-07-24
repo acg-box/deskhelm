@@ -1,7 +1,8 @@
 ---
-type: "Reference"
-title: "Operations And Validation"
-openwiki_generated: true
+type: Operations Runbook
+title: DeskHelm Operations and Validation
+description: Documents DeskHelm Rust and Swift builds, native app staging and diagnostics, validation, CI, release packaging, and publication procedures.
+tags: [deskhelm, operations, swiftpm, ci, release]
 ---
 
 # Operations And Validation
@@ -15,12 +16,13 @@ Repository-native tasks are declared in `Makefile.toml` and invoked with `cargo 
 | Project Rust toolchain from `rust-toolchain.toml` | Rust check, lint, test, and build tasks |
 | Nightly toolchain with rustfmt | `fmt-rust`, `fmt-rust-check` |
 | Node.js/npm from `.node-version` | TypeScript check, format, lint, test, and template-marker tasks |
+| Xcode/Swift 6.2 on macOS | SwiftPM app build and Swift tests; the app supports macOS 14 or later |
 | `cargo-make` | Every `cargo make` entrypoint |
 | `taplo` | TOML format tasks |
 | `cargo-vstyle` | vstyle tasks and the composite lint/full gates |
 | `cargo-nextest` | test tasks |
 
-`rust-toolchain.toml` is the sole selector for ordinary Rust commands. It selects stable with the minimal profile and adds Clippy; Cargo and rustc come from that profile. Rust formatting is the only explicit toolchain exception: `fmt-rust` and `fmt-rust-check` run nightly rustfmt because `.rustfmt.toml` uses nightly features. Third-party Cargo tools remain separate prerequisites. `.node-version`, `package.json`, and `package-lock.json` pin Node.js, npm, and the TypeScript development graph. Run `npm ci --ignore-scripts` before a TypeScript task or the full aggregate; repository tasks validate but do not install dependencies. CI reads the ordinary Rust toolchain and components from `rust-toolchain.toml`, installs nightly rustfmt separately, installs Taplo for the TOML job, and performs the locked npm install for the TypeScript job.
+`rust-toolchain.toml` is the sole selector for ordinary Rust commands. It selects stable with the minimal profile and adds Clippy; Cargo and rustc come from that profile. Rust formatting is the only explicit toolchain exception: `fmt-rust` and `fmt-rust-check` run nightly rustfmt because `.rustfmt.toml` uses nightly features. Third-party Cargo tools remain separate prerequisites. `.node-version`, `package.json`, and `package-lock.json` pin Node.js, npm, and the TypeScript development graph. Run `npm ci --ignore-scripts` before a TypeScript task or the full aggregate; repository tasks validate but do not install dependencies. On macOS, `script/build_and_run.sh` requires `/Applications/Xcode-beta.app` when `DEVELOPER_DIR` is unset. SwiftPM declares tools version 6.2 and a macOS 14 deployment minimum. CI reads the ordinary Rust toolchain and components from `rust-toolchain.toml`, installs nightly rustfmt separately, installs Taplo for the TOML job, and performs the locked npm install for the TypeScript job.
 
 Sources: `rust-toolchain.toml`, `Makefile.toml`, `.node-version`, `package.json`, `package-lock.json`, `.github/workflows/language.yml`, `.github/workflows/release.yml`.
 
@@ -30,7 +32,7 @@ Sources: `rust-toolchain.toml`, `Makefile.toml`, `.node-version`, `package.json`
 cargo make check
 ```
 
-`check` is a cargo-make composite whose dependencies are `check-rust`, `check-typescript`, `fmt-check`, `lint`, and `test`. `Makefile.toml` establishes the dependency set but does not state a runtime ordering contract. When deterministic, fail-fast diagnosis matters, invoke the targeted commands explicitly in this recommended sequence:
+`check` is a cargo-make composite whose dependencies are `check-rust`, macOS-only `check-swift`, `check-typescript`, `fmt-check`, `lint`, and `test`. `check-swift` runs the native build script with `--build-only`; `test` includes macOS-only `test-swift`, which runs the script with `--test`. On non-macOS hosts cargo-make skips those conditioned tasks. `Makefile.toml` establishes the dependency set but does not state a runtime ordering contract. When deterministic, fail-fast diagnosis matters, invoke the targeted commands explicitly in this recommended sequence:
 
 ```sh
 cargo make fmt-check
@@ -46,8 +48,9 @@ This diagnostic order catches mechanical formatting drift before compilation/lin
 
 | Task | Exact behavior | Mutates files? |
 | --- | --- | --- |
-| `check` | Composite: `check-rust`, `check-typescript`, `fmt-check`, `lint`, `test` | Build/tool caches only |
+| `check` | Composite: `check-rust`, macOS-only `check-swift`, `check-typescript`, `fmt-check`, `lint`, `test` | Build/tool caches |
 | `check-rust` | `cargo check --all-features --all-targets --workspace` | Build cache only |
+| `check-swift` | On macOS, run `./script/build_and_run.sh --build-only` | Rebuilds Cargo/Swift caches without staging or launching |
 | `check-typescript` | Run the installed TypeScript compiler with `--noEmit --project tsconfig.json` | Tool cache only |
 | `fmt` | Composite: `fmt-rust`, `fmt-toml`, `fmt-typescript` | Yes |
 | `fmt-check` | Composite: `fmt-rust-check`, `fmt-toml-check`, `fmt-typescript-check` | No |
@@ -68,8 +71,9 @@ This diagnostic order catches mechanical formatting drift before compilation/lin
 | `lint-fix-vstyle` | Composite: `lint-fix-vstyle-rust` | Yes |
 | `lint-fix-vstyle-rust` | `cargo vstyle tune --language rust --workspace --all-features --strict` | Yes |
 | `list-template-markers` | Run the tracked-file marker inventory through Node.js | No |
-| `test` | Composite: `test-rust`, `test-typescript` | Build/tool caches only |
+| `test` | Composite: `test-rust`, macOS-only `test-swift`, `test-typescript` | Build/tool caches only |
 | `test-rust` | `cargo nextest run --workspace --all-targets --all-features` | Build cache only |
+| `test-swift` | On macOS, build the Rust library and run `swift test` through `./script/build_and_run.sh --test` | Cargo/Swift build caches only |
 | `test-typescript` | `node --test` over the discovered `*.test.ts` files | Tool cache only |
 
 The Clippy tasks deny `clippy::all`, `clippy::too_many_lines`, `clippy::unwrap_used`, `clippy::use_self`, `clippy::wildcard_imports`, `missing-docs`, `unused-crate-dependencies`, and all warnings. `clippy.toml` allows unwrap only in tests, sets a 120-line threshold, and warns on wildcard imports. Rust formatting intentionally uses nightly features from `.rustfmt.toml`; Taplo excludes `Makefile.toml` and generated/local trees.
@@ -91,28 +95,79 @@ cargo make list-template-markers
 
 The marker script forwards `git grep` output as `path:line:text` records. A marker record means the repository still contains template identity. No marker records means no configured marker was found; cargo-make can still print its own task status. Both inventory results are successful; inability to execute Git or another Git failure fails the task. The helper scans all tracked files, so it does not read untracked or ignored secret-bearing files.
 
-Before Node/npm is installed, use the equivalent scoped `rg` fallback from [Template Adoption](template-adoption.md#1-establish-identity-and-inventory). Keep that fallback for bootstrap only; `list-template-markers` owns the installed repository command.
+Before Node/npm is installed, use a narrowly scoped `rg` fallback over repository source as described in [Template Adoption](template-adoption.md#residual-identity-checks). Keep that fallback for bootstrap only; `list-template-markers` owns the installed repository command.
 
 Sources: `scripts/list-template-markers.ts`, `scripts/list-template-markers.test.ts`, `Makefile.toml`, `openwiki/template-adoption.md`.
 
-## Build, Install, Run, And Bundle
+## Native App Build And Run
 
-Common Cargo commands are not cargo-make tasks:
+The repository-owned SwiftPM entrypoint builds the Rust static library, links the Swift package, verifies the executable's linked SDK identity, creates a local app bundle, and opens it:
 
 ```sh
-cargo build -p name_placeholder
-cargo build --release -p name_placeholder
-cargo build -p name_placeholder --profile final-release --locked
-cargo install --path apps/name_placeholder --force
-cargo run -p name_placeholder -- --help
+./script/build_and_run.sh
 ```
 
-- Default release output: `target/release/name_placeholder` (or `.exe`).
-- `final-release` output: `target/final-release/name_placeholder` unless `--target` adds a target-triple directory.
-- macOS app bundling is optional and requires `cargo-bundle`; run it from `apps/name_placeholder/` as documented in the README.
+The script uses `DESKHELM_CONFIGURATION=debug` by default; set it to `release` for Cargo and Swift release builds. It exports `DESKHELM_RUST_LIB_DIR` as `target/<configuration>` so `apps/deskhelm/macos/Package.swift` can link `libdeskhelm`. Swift build, test, and binary-path queries receive explicit `-platform_version macos` linker arguments with deployment minimum 14.0 and the SDK version selected by `xcrun`; after an app build, `vtool` must report that same linked SDK or the script fails. This avoids SwiftPM's swiftbuild backend recording the deployment target as both build-version values, which would lose current linked-on UI behavior. Launching modes stage `apps/deskhelm/macos/dist/DeskHelm.app` with executable `DeskHelmMac`, bundle ID `com.acgbox.deskhelm`, macOS 14 minimum, and `LSUIElement=true`, then sign and verify it. Signing is ad hoc by default; `DESKHELM_CODE_SIGN_IDENTITY` selects an authorized Apple Development identity when Accessibility authorization must persist across rebuilds. `--build-only` stops after the Rust and Swift builds plus linked-SDK verification and does not stage the bundle. This local development bundle is not the artifact produced by the CLI release workflow.
+
+```mermaid
+flowchart TD
+    Start["Run build_and_run.sh"] --> Rust["Build locked Rust library"]
+    Rust --> Mode{"Selected mode"}
+    Mode -->|test| Tests["Run swift test"]
+    Mode -->|other| Swift["Build SwiftPM executable"]
+    Swift --> SDK["Verify linked SDK identity"]
+    SDK --> BuildOnly{"Build only"}
+    BuildOnly -->|yes| Stop["Report successful build"]
+    BuildOnly -->|no| Stage["Stage and sign DeskHelm.app"]
+    Stage --> Launch["Stop prior process and open app"]
+    Launch --> Action{"Run or diagnostic mode"}
+    Action --> Verify["Verify status item readiness"]
+    Action --> VerifyPanel["Verify panel window state"]
+    Action --> Debug["Attach LLDB"]
+    Action --> Logs["Stream unified logs"]
+    Action --> Telemetry["Record Time Profiler trace"]
+```
+
+The script owns the native build, staging, launch, and diagnostic branches.
+
+### Script Modes And Diagnostics
+
+| Mode | Behavior |
+| --- | --- |
+| no argument or `--run` | Build Rust and Swift, stage the app, replace a running `DeskHelmMac`, and launch |
+| `--build-only` | Build Rust and Swift, verify the executable's linked SDK, and stop without staging or launching; used by `check-swift` |
+| `--test` | Build the Rust library and run Swift tests with the explicit platform-version linker arguments, without staging or launching |
+| `--verify` | Launch, then confirm the process stays alive and publishes the expected `NSStatusItem` readiness state |
+| `--verify-panel` | Launch with the panel open, then confirm status-item readiness plus visible, key, nonactivating, on-screen panel state and positive dimensions |
+| `--debug` | Launch and attach LLDB to the process |
+| `--logs` | Launch and stream unified logs for `DeskHelmMac` |
+| `--telemetry` | Launch and record a Time Profiler trace under `apps/deskhelm/macos/dist/` |
+
+`--verify` checks that DeskHelm created its square, image-only status item and owns a panel using app-published `UserDefaults`. It cannot prove the panel material or that macOS visually presents the item when menu-bar space, a notch, or a third-party menu manager intervenes. `--verify-panel` additionally checks the app-published panel phase, visibility, key-window and nonactivating state, screen intersection, window number, and dimensions. Neither mode tests click-away dismissal, Accessibility prompting, media-key interception, the passive HUD, or physical DDC/CI behavior. The app lifecycle behind these checks is documented in [Architecture and Runtime](architecture-and-runtime.md#native-appkit-shell), and the opt-in event path is documented in [Architecture and Runtime](architecture-and-runtime.md#optional-keyboard-volume-control).
+
+Swift tests under `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/` exercise continuous draft clamping, volume-state validation, refresh behavior, latest-target preview coalescing, automatic and release-time confirmation, refresh and stale-result races, failure recovery, decoder allowlisting, system-repeat acceptance, and one-point media-key adjustment. They do not exercise AppKit window behavior, Accessibility permission, the live event tap, HUD presentation, opaque-session timing on physical hardware, or display reconfiguration.
+
+Sources: `script/build_and_run.sh`, `apps/deskhelm/macos/Package.swift`, `apps/deskhelm/macos/Sources/`, `apps/deskhelm/macos/Tests/`, `Makefile.toml`.
+
+## CLI Build And Run
+
+Common CLI commands are direct Cargo commands rather than cargo-make tasks:
+
+```sh
+cargo build --locked -p deskhelm
+cargo run --locked -p deskhelm -- volume
+cargo run --locked -p deskhelm -- volume 25
+cargo build --locked -p deskhelm --profile final-release
+```
+
+- The `volume` subcommand reads when `LEVEL` is omitted. It sets an integer from 0 through 100 only after the display reports a 0–100 volume range.
+- Default debug output is `target/debug/deskhelm`; `final-release` output is `target/final-release/deskhelm` unless `--target` adds a target-triple directory.
+- Hardware operations are implemented only for Apple Silicon macOS and compatible DDC/CI paths. Other compiled targets return an explicit unsupported-platform error.
 - Release reproducibility relies on `--locked`; an out-of-date lockfile is a release blocker rather than permission to omit the flag.
 
-Sources: `README.md`, `Cargo.toml`, `.github/workflows/release.yml`.
+The CLI reaches the conservative display-selection and DDC/CI pipeline described in [Architecture and Runtime](architecture-and-runtime.md#display-selection-and-safety).
+
+Sources: `README.md`, `Cargo.toml`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/cli.rs`, `apps/deskhelm/src/display.rs`.
 
 ## CI Checks
 
@@ -124,7 +179,7 @@ Three jobs run independently:
 - **TOML check:** installs cargo-make and Taplo, then runs `fmt-toml-check`.
 - **TypeScript check:** reads the exact Node.js version from `.node-version`, installs the locked npm graph without lifecycle scripts, then runs TypeScript format, compiler, type-aware lint, and test tasks through cargo-make.
 
-CI does **not** invoke `cargo make check` or validate OpenWiki. Running on a documentation-only diff does not turn this workflow into a documentation-readiness gate: green proves only the listed Rust/TOML/TypeScript checks. The former CodeQL workflow—push/PR analysis for `main` plus weekly Actions/Rust scans—has been removed, so no tracked workflow currently provides that security-analysis coverage. Actions are SHA-pinned in current tracked workflows; preserve that supply-chain posture when updating them. Dependabot covers Cargo, root npm, and GitHub Actions; the TypeScript compiler, types, formatter, linter, and type-aware backend update as one review group.
+The language workflow does **not** invoke `cargo make check` as one command or validate OpenWiki. Running on a documentation-only diff proves only its listed Rust/TOML/TypeScript checks. The former CodeQL workflow has been removed, so no tracked workflow currently provides that security-analysis coverage. Actions in the language and release workflows are SHA-pinned. Dependabot covers Cargo, root npm, and GitHub Actions.
 
 Source: `.github/workflows/language.yml`.
 
@@ -132,14 +187,14 @@ Source: `.github/workflows/language.yml`.
 
 A tag matching `v<major>.<minor>.<patch>` triggers `.github/workflows/release.yml`:
 
-1. Build `name_placeholder` with locked `final-release` for Apple arm64, Linux x86_64 GNU, and Windows x86_64 MSVC.
-2. Package macOS/Windows as ZIP and Linux as tar.gz; upload one-day intermediate artifacts.
+1. Build `deskhelm` with locked `final-release` for Apple arm64, Linux x86_64 GNU, and Windows x86_64 MSVC.
+2. Package macOS/Windows as ZIP and Linux as tar.gz; upload one-day intermediate artifacts named `deskhelm-<target>`.
 3. After all builds, combine and publish artifacts to a GitHub Release with generated notes.
-4. Independently publish package `name_placeholder` to crates.io using the configured repository secret.
+4. Independently publish package `deskhelm` to crates.io using the configured repository secret.
 
-The crates.io job does not depend on the build or GitHub release jobs; GitHub Actions may run it concurrently. A failure in one branch does not imply the other branch never ran. All names, package selectors, and archive paths are still template placeholders and must change together during adoption.
+The crates.io job does not depend on the build or GitHub Release jobs and may run concurrently. The Linux and Windows artifacts compile and package the CLI, but display operations return the unsupported-platform error there. The Apple Silicon macOS artifact is the only hardware-capable target, and it still requires the compatible display path in [Architecture and Runtime](architecture-and-runtime.md#lg-39gx950b-usb-c-boundary).
 
-Sources: `.github/workflows/release.yml`, `Cargo.toml`, `apps/name_placeholder/Cargo.toml`.
+Sources: `.github/workflows/release.yml`, `Cargo.toml`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/display.rs`.
 
 ## Failure Interpretation
 

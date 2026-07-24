@@ -1,0 +1,54 @@
+// swift-tools-version: 6.2
+
+import Foundation
+import PackageDescription
+
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let defaultRustLibraryDirectory =
+  packageRoot
+  .appendingPathComponent("../../../target/debug")
+  .standardizedFileURL
+  .path
+let rustLibraryDirectory =
+  ProcessInfo.processInfo.environment["DESKHELM_RUST_LIB_DIR"]
+  ?? defaultRustLibraryDirectory
+
+let deskHelmLinkerSettings: [LinkerSetting] = [
+  .unsafeFlags(["-L", rustLibraryDirectory]),
+  .linkedLibrary("deskhelm"),
+  .linkedFramework("CoreFoundation"),
+  .linkedFramework("CoreGraphics"),
+  .linkedFramework("IOKit"),
+]
+
+let package = Package(
+  name: "DeskHelmMac",
+  platforms: [
+    .macOS(.v14)
+  ],
+  products: [
+    .executable(name: "DeskHelmMac", targets: ["DeskHelmMac"])
+  ],
+  targets: [
+    .target(
+      name: "CDeskHelm",
+      publicHeadersPath: "include"
+    ),
+    .target(
+      name: "DeskHelmAppCore",
+      dependencies: ["CDeskHelm"],
+      linkerSettings: deskHelmLinkerSettings
+    ),
+    .executableTarget(
+      name: "DeskHelmMac",
+      dependencies: ["DeskHelmAppCore"],
+      linkerSettings: [
+        .linkedFramework("CoreAudio")
+      ]
+    ),
+    .testTarget(
+      name: "DeskHelmAppCoreTests",
+      dependencies: ["DeskHelmAppCore"]
+    ),
+  ]
+)

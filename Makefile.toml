@@ -5,6 +5,7 @@
 # | ---------------- | --------- | --- |
 # | check            | composite |     |
 # | check-rust       | command   |     |
+# | check-swift      | command   |     |
 # | check-typescript | command   |     |
 
 [tasks.check]
@@ -12,6 +13,7 @@ clear = true
 workspace = false
 dependencies = [
 	"check-rust",
+	"check-swift",
 	"check-typescript",
 	"fmt-check",
 	"lint",
@@ -26,6 +28,14 @@ args = [
 	"--all-features",
 	"--all-targets",
 	"--workspace",
+]
+
+[tasks.check-swift]
+workspace = false
+condition = { platforms = ["mac"] }
+command = "./script/build_and_run.sh"
+args = [
+	"--build-only",
 ]
 
 [tasks.check-typescript]
@@ -288,6 +298,7 @@ args = [
 # | --------------- | --------- | --- |
 # | test            | composite |     |
 # | test-rust       | command   |     |
+# | test-swift      | command   |     |
 # | test-typescript | command   |     |
 
 [tasks.test]
@@ -295,6 +306,7 @@ clear = true
 workspace = false
 dependencies = [
 	"test-rust",
+	"test-swift",
 	"test-typescript",
 ]
 
@@ -307,6 +319,14 @@ args = [
 	"--workspace",
 	"--all-targets",
 	"--all-features",
+]
+
+[tasks.test-swift]
+workspace = false
+condition = { platforms = ["mac"] }
+command = "./script/build_and_run.sh"
+args = [
+	"--test",
 ]
 
 [tasks.test-typescript]
