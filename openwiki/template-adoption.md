@@ -22,7 +22,7 @@ The migration changed these coupled values together:
 - Cargo package, binary, and app directory: the former placeholder values changed to `deskhelm` and `apps/deskhelm/`.
 - Private npm tooling package: the former placeholder value changed to `deskhelm-workspace`.
 - Workspace description, homepage, and repository metadata to DeskHelm and `acg-box/deskhelm`.
-- README content from placeholder/TODO guidance to the implemented product, requirements, commands, and limitations.
+- README content from placeholder/TODO guidance to the public product pitch, supported status, workspace ownership, installation, interaction, update, development, and release-download guidance.
 - Release selectors, executable paths, archive names, artifact globs, and crates.io publication target to `deskhelm`.
 - Placeholder logging/build-metadata runtime to a shared Rust library, direct CLI, C ABI, and AppKit/SwiftUI menu-bar app over the Apple Silicon DDC/CI transport.
 
