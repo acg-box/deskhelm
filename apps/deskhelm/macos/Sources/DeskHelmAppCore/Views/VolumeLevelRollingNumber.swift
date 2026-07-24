@@ -6,18 +6,40 @@ struct VolumeLevelRollingNumber: View {
   let weight: Font.Weight
 
   var body: some View {
+    let digits = presentation.rollingDigits
+
+    HStack(spacing: 0) {
+      ForEach(digits.indices, id: \.self) { index in
+        VolumeLevelRollingDigit(
+          presentation: digits[index],
+          progress: presentation.transitionProgress,
+          weight: weight
+        )
+      }
+    }
+    .frame(width: 30, height: 22, alignment: .trailing)
+    .clipped()
+    .accessibilityHidden(true)
+  }
+}
+
+@MainActor
+private struct VolumeLevelRollingDigit: View {
+  let presentation: VolumeLevelRollingDigitPresentation
+  let progress: Double
+  let weight: Font.Weight
+
+  var body: some View {
     GeometryReader { proxy in
-      let progress = presentation.transitionProgress
+      ZStack {
+        if presentation.isAnimated {
+          digit(presentation.lowerDigit)
+            .offset(y: -progress * proxy.size.height)
 
-      ZStack(alignment: .trailing) {
-        number(presentation.lowerLevel)
-          .opacity(1 - progress)
-          .offset(y: -progress * proxy.size.height)
-
-        if presentation.upperLevel != presentation.lowerLevel {
-          number(presentation.upperLevel)
-            .opacity(progress)
+          digit(presentation.upperDigit)
             .offset(y: (1 - progress) * proxy.size.height)
+        } else {
+          digit(presentation.lowerDigit)
         }
       }
       .frame(
@@ -26,13 +48,17 @@ struct VolumeLevelRollingNumber: View {
         alignment: .trailing
       )
     }
-    .frame(width: 30, height: 22)
+    .frame(width: 10, height: 22)
     .clipped()
-    .accessibilityHidden(true)
   }
 
-  private func number(_ level: Int) -> some View {
-    Text(level, format: .number)
-      .font(.body.monospacedDigit().weight(weight))
+  @ViewBuilder
+  private func digit(_ value: Int?) -> some View {
+    if let value {
+      Text(String(value))
+        .font(.body.monospacedDigit().weight(weight))
+    } else {
+      Color.clear
+    }
   }
 }

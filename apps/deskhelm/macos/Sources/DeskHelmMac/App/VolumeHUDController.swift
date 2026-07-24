@@ -91,6 +91,7 @@ final class VolumeHUDController {
       .transient,
     ]
     panel.animationBehavior = .utilityWindow
+    panel.initialFirstResponder = nil
   }
 
   private func present(
@@ -116,6 +117,7 @@ final class VolumeHUDController {
     if !panel.isKeyWindow {
       panel.makeKey()
     }
+    _ = panel.makeFirstResponder(nil)
     panel.alphaValue = 1
     panel.displayIfNeeded()
     if !wasVisible {
@@ -194,11 +196,21 @@ final class VolumeHUDController {
   }
 
   private func publishState(phase: String) {
+    let firstResponderKind: String
+    if panel.firstResponder === panel {
+      firstResponderKind = "window"
+    } else if let firstResponder = panel.firstResponder {
+      firstResponderKind = String(describing: type(of: firstResponder))
+    } else {
+      firstResponderKind = "none"
+    }
+
     let summary =
       "phase=\(phase) visible=\(panel.isVisible) key=\(panel.isKeyWindow) "
       + "active=\(NSApp.isActive) "
       + "nonactivating=\(panel.styleMask.contains(.nonactivatingPanel)) "
       + "canBecomeKey=\(panel.canBecomeKey) "
+      + "firstResponder=\(firstResponderKind) "
       + "ignoresMouse=\(panel.ignoresMouseEvents) "
       + "surface=swiftui-clear-glass-single-tree "
       + "windowNumber=\(panel.windowNumber) "
