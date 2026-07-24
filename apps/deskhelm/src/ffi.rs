@@ -71,19 +71,16 @@ pub unsafe extern "C" fn deskhelm_set_volume(
 		return STATUS_INVALID_ARGUMENT;
 	}
 
-	run_boundary(out_result, || {
+	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
-			// SAFETY: `prepare_output` accepted this pointer and initialized its pointee.
-			unsafe {
-				(*out_result).error = owned_c_string(&format!(
-					"Volume level {level} is outside the supported 0–100 range."
-				));
-			}
+			result.error = owned_c_string(&format!(
+				"Volume level {level} is outside the supported 0–100 range."
+			));
 
 			return STATUS_INVALID_ARGUMENT;
 		}
 
-		complete_operation(out_result, || crate::set_volume(level as u8))
+		complete_operation(result, || crate::set_volume(level as u8))
 	})
 }
 
@@ -107,23 +104,23 @@ pub unsafe extern "C" fn deskhelm_session_create(
 		return STATUS_INVALID_ARGUMENT;
 	}
 
-	run_boundary(out_result, || {
+	run_boundary(out_result, |result| {
 		if !session_output_ready {
-			return invalid_argument(out_result, "DeskHelm received no session output storage.");
+			return invalid_argument(result, "DeskHelm received no session output storage.");
 		}
 
 		match VerifiedSession::create() {
 			Ok((inner, reading)) => {
 				let session = Box::new(DeskHelmSession { inner });
 
-				write_reading(out_result, &reading);
+				write_reading(result, &reading);
 
 				// SAFETY: `prepare_session_output` accepted and initialized this pointer.
 				unsafe { ptr::write(out_session, Box::into_raw(session)) };
 
 				STATUS_OK
 			},
-			Err(error) => runtime_error(out_result, &error),
+			Err(error) => runtime_error(result, &error),
 		}
 	})
 }
@@ -146,15 +143,15 @@ pub unsafe extern "C" fn deskhelm_session_read(
 		return STATUS_INVALID_ARGUMENT;
 	}
 
-	run_boundary(out_result, || {
+	run_boundary(out_result, |result| {
 		if session.is_null() {
-			return invalid_argument(out_result, "DeskHelm received no display session.");
+			return invalid_argument(result, "DeskHelm received no display session.");
 		}
 
 		// SAFETY: The caller guarantees exclusive access to a live DeskHelm session.
 		let session = unsafe { &mut *session };
 
-		complete_operation(out_result, || session.inner.read_volume())
+		complete_operation(result, || session.inner.read_volume())
 	})
 }
 
@@ -175,21 +172,21 @@ pub unsafe extern "C" fn deskhelm_session_set(
 		return STATUS_INVALID_ARGUMENT;
 	}
 
-	run_boundary(out_result, || {
+	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
 			return invalid_argument(
-				out_result,
+				result,
 				&format!("Volume level {level} is outside the supported 0–100 range."),
 			);
 		}
 		if session.is_null() {
-			return invalid_argument(out_result, "DeskHelm received no display session.");
+			return invalid_argument(result, "DeskHelm received no display session.");
 		}
 
 		// SAFETY: The caller guarantees exclusive access to a live DeskHelm session.
 		let session = unsafe { &mut *session };
 
-		complete_operation(out_result, || session.inner.set_volume(level as u8))
+		complete_operation(result, || session.inner.set_volume(level as u8))
 	})
 }
 
@@ -213,21 +210,21 @@ pub unsafe extern "C" fn deskhelm_session_write(
 		return STATUS_INVALID_ARGUMENT;
 	}
 
-	run_boundary(out_result, || {
+	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
 			return invalid_argument(
-				out_result,
+				result,
 				&format!("Volume level {level} is outside the supported 0–100 range."),
 			);
 		}
 		if session.is_null() {
-			return invalid_argument(out_result, "DeskHelm received no display session.");
+			return invalid_argument(result, "DeskHelm received no display session.");
 		}
 
 		// SAFETY: The caller guarantees exclusive access to a live DeskHelm session.
 		let session = unsafe { &mut *session };
 
-		complete_operation(out_result, || session.inner.write_volume(level as u8))
+		complete_operation(result, || session.inner.write_volume(level as u8))
 	})
 }
 
@@ -307,72 +304,67 @@ fn run_operation(
 	out_result: *mut DeskHelmVolumeResult,
 	operation: impl FnOnce() -> Result<VolumeReading>,
 ) -> i32 {
-	run_boundary(out_result, || complete_operation(out_result, operation))
+	run_boundary(out_result, |result| complete_operation(result, operation))
 }
 
 fn complete_operation(
-	out_result: *mut DeskHelmVolumeResult,
+	result: &mut DeskHelmVolumeResult,
 	operation: impl FnOnce() -> Result<VolumeReading>,
 ) -> i32 {
 	match operation() {
 		Ok(reading) => {
-			write_reading(out_result, &reading);
+			write_reading(result, &reading);
 
 			STATUS_OK
 		},
-		Err(error) => runtime_error(out_result, &error),
+		Err(error) => runtime_error(result, &error),
 	}
 }
 
-fn write_reading(out_result: *mut DeskHelmVolumeResult, reading: &VolumeReading) {
-	// SAFETY: The exported function prepared and validated this output pointer.
-	unsafe {
-		(*out_result).current = reading.current();
-		(*out_result).maximum = reading.maximum();
-		(*out_result).display = owned_c_string(reading.display());
-	}
+fn write_reading(result: &mut DeskHelmVolumeResult, reading: &VolumeReading) {
+	result.current = reading.current();
+	result.maximum = reading.maximum();
+	result.display = owned_c_string(reading.display());
 }
 
-fn runtime_error(out_result: *mut DeskHelmVolumeResult, error: &Report) -> i32 {
-	// SAFETY: The exported function prepared and validated this output pointer.
-	unsafe {
-		(*out_result).error = owned_c_string(&error_text(error));
-	}
+fn runtime_error(result: &mut DeskHelmVolumeResult, error: &Report) -> i32 {
+	result.error = owned_c_string(&error_text(error));
 
 	STATUS_RUNTIME_ERROR
 }
 
-fn invalid_argument(out_result: *mut DeskHelmVolumeResult, message: &str) -> i32 {
-	// SAFETY: The exported function prepared and validated this output pointer.
-	unsafe {
-		(*out_result).error = owned_c_string(message);
-	}
+fn invalid_argument(result: &mut DeskHelmVolumeResult, message: &str) -> i32 {
+	result.error = owned_c_string(message);
 
 	STATUS_INVALID_ARGUMENT
 }
 
-fn run_boundary(out_result: *mut DeskHelmVolumeResult, operation: impl FnOnce() -> i32) -> i32 {
-	match panic::catch_unwind(AssertUnwindSafe(operation)) {
+fn run_boundary(
+	out_result: *mut DeskHelmVolumeResult,
+	operation: impl FnOnce(&mut DeskHelmVolumeResult) -> i32,
+) -> i32 {
+	let mut result = DeskHelmVolumeResult::empty();
+	let status = match panic::catch_unwind(AssertUnwindSafe(|| operation(&mut result))) {
 		Ok(status) => status,
 		Err(payload) => {
-			// SAFETY: The exported function prepared this output pointer before entering the
-			// boundary. Any non-null string came from DeskHelm.
-			unsafe {
-				free_owned_strings(&mut *out_result);
+			// SAFETY: Any non-null string in the private staging result came from DeskHelm.
+			unsafe { free_owned_strings(&mut result) };
 
-				ptr::write(out_result, DeskHelmVolumeResult::empty());
-			}
+			result = DeskHelmVolumeResult::empty();
 
 			let _ = panic::catch_unwind(AssertUnwindSafe(|| {
-				// SAFETY: The result was reset immediately above and remains writable.
-				unsafe {
-					(*out_result).error = owned_c_string(&panic_text(payload.as_ref()));
-				}
+				result.error = owned_c_string(&panic_text(payload.as_ref()));
 			}));
 
 			STATUS_PANIC
 		},
-	}
+	};
+
+	// SAFETY: The exported function prepared and validated this output pointer. The internal
+	// callbacks receive only the private staging value and do not capture caller result storage.
+	unsafe { ptr::write(out_result, result) };
+
+	status
 }
 
 fn error_text(error: &Report) -> String {
@@ -615,6 +607,32 @@ mod tests {
 		let error = unsafe { CStr::from_ptr(result.error) }.to_string_lossy();
 
 		assert!(error.contains("test panic"));
+
+		// SAFETY: DeskHelm initialized this result and owns its returned strings.
+		unsafe { ffi::deskhelm_volume_result_free(&mut result) };
+	}
+
+	#[test]
+	fn panic_after_partial_result_resets_the_staged_output() {
+		let mut result = DeskHelmVolumeResult::empty();
+		let status = ffi::run_boundary(&mut result, |staged| {
+			staged.current = 42;
+			staged.maximum = 100;
+			staged.display = ffi::owned_c_string("LG UltraGear");
+
+			panic!("panic after staging a result");
+		});
+
+		assert_eq!(status, STATUS_PANIC);
+		assert_eq!(result.current, 0);
+		assert_eq!(result.maximum, 0);
+		assert!(result.display.is_null());
+		assert!(!result.error.is_null());
+
+		// SAFETY: A caught panic returns a valid null-terminated error string.
+		let error = unsafe { CStr::from_ptr(result.error) }.to_string_lossy();
+
+		assert!(error.contains("panic after staging a result"));
 
 		// SAFETY: DeskHelm initialized this result and owns its returned strings.
 		unsafe { ffi::deskhelm_volume_result_free(&mut result) };
