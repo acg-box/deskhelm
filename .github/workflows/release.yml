@@ -43,31 +43,31 @@ jobs:
         run: rustup target add ${{ matrix.target.name }}
 
       - name: Build
-        run: cargo build -p name_placeholder --profile final-release --locked --target ${{ matrix.target.name }}
+        run: cargo build -p deskhelm --profile final-release --locked --target ${{ matrix.target.name }}
 
       - name: Pack (macOS)
         if: matrix.target.os == 'macos-latest'
         run: |
-          mv target/${{ matrix.target.name }}/final-release/name_placeholder .
-          zip name_placeholder-${{ matrix.target.name }}.zip name_placeholder
+          mv target/${{ matrix.target.name }}/final-release/deskhelm .
+          zip deskhelm-${{ matrix.target.name }}.zip deskhelm
 
       - name: Pack (Windows)
         if: matrix.target.os == 'windows-latest'
         run: |
-          mv target/${{ matrix.target.name }}/final-release/name_placeholder.exe .
-          Compress-Archive -Path name_placeholder.exe -DestinationPath name_placeholder-${{ matrix.target.name }}.zip
+          mv target/${{ matrix.target.name }}/final-release/deskhelm.exe .
+          Compress-Archive -Path deskhelm.exe -DestinationPath deskhelm-${{ matrix.target.name }}.zip
 
       - name: Pack (Linux)
         if: matrix.target.os == 'ubuntu-latest'
         run: |
-          mv target/${{ matrix.target.name }}/final-release/name_placeholder .
-          tar -czvf name_placeholder-${{ matrix.target.name }}.tar.gz name_placeholder
+          mv target/${{ matrix.target.name }}/final-release/deskhelm .
+          tar -czvf deskhelm-${{ matrix.target.name }}.tar.gz deskhelm
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: name_placeholder-${{ matrix.target.name }}
-          path: name_placeholder-${{ matrix.target.name }}.*
+          name: deskhelm-${{ matrix.target.name }}
+          path: deskhelm-${{ matrix.target.name }}.*
           retention-days: 1
 
   # release:
@@ -91,7 +91,7 @@ jobs:
       - name: Prepare release artifacts
         run: |
           mkdir -p artifacts
-          mv name_placeholder-*/* artifacts/
+          mv deskhelm-*/* artifacts/
 
       - name: Publish
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -116,4 +116,4 @@ jobs:
         run: cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Publish
-        run: cargo publish -p name_placeholder --locked
+        run: cargo publish -p deskhelm --locked

@@ -1,128 +1,74 @@
 ---
-type: "Reference"
-title: "Template Adoption"
-openwiki_generated: true
+type: Migration Guide
+title: DeskHelm Template Adoption
+description: Records the completed conversion from the former workspace template to DeskHelm and identifies identity, runtime, release, documentation, and validation surfaces to keep aligned.
+tags: [deskhelm, migration, template]
 ---
 
-# Template Adoption
+# DeskHelm Template Adoption
 
-## Goal And Preconditions
+## Status
 
-Use this procedure when deriving a real repository from the template. Before editing, know the project name and description, repository/homepage, maintainers, runtime/interface shape, application-data owner, release targets, and whether the workspace remains a monorepo.
+The repository has adopted the former workspace template as DeskHelm. The current worktree replaces the placeholder package and CLI with `apps/deskhelm/`, sets real workspace and npm identities, defines the shared Rust DDC/CI core and native macOS menu-bar prototype, rewrites the public README, and renames release package and artifact paths.
 
-Success means no unintended template identity remains, ownership and runtime docs describe the real project, release/package paths agree, and relevant validation passes. A blind global replacement is insufficient because some placeholders require design decisions or path moves.
+This page is no longer a procedure for an unstarted adoption. It records the coupled surfaces changed by the migration so future renames or product pivots do not leave mixed identity behind. Current runtime behavior is canonical in [Architecture and Runtime](architecture-and-runtime.md); commands are canonical in [Operations](operations.md).
 
-Sources: `README.md`, `Cargo.toml`, `Cargo.lock`, `package.json`, `package-lock.json`, `scripts/list-template-markers.ts`, `apps/name_placeholder/Cargo.toml`, `apps/name_placeholder/README.md`, `apps/name_placeholder/src/main.rs`, `apps/name_placeholder/src/cli.rs`, `.github/workflows/language.yml`, `.github/workflows/release.yml`; migration rationale and history are retained in [Knowledge Maintenance](knowledge-maintenance.md).
+Sources: `README.md`, `Cargo.toml`, `Cargo.lock`, `package.json`, `package-lock.json`, `apps/deskhelm/`, `.github/workflows/release.yml`.
 
-## 1. Establish Identity And Inventory
+## Completed Identity Transition
 
-Install the exact TypeScript tool graph and inventory the configured markers in tracked source:
+The migration changed these coupled values together:
+
+- Cargo package, binary, and app directory: the former placeholder values changed to `deskhelm` and `apps/deskhelm/`.
+- Private npm tooling package: the former placeholder value changed to `deskhelm-workspace`.
+- Workspace description, homepage, and repository metadata to DeskHelm and `acg-box/deskhelm`.
+- README content from placeholder/TODO guidance to the implemented product, requirements, commands, and limitations.
+- Release selectors, executable paths, archive names, artifact globs, and crates.io publication target to `deskhelm`.
+- Placeholder logging/build-metadata runtime to a shared Rust library, direct CLI, C ABI, and AppKit/SwiftUI menu-bar app over the Apple Silicon DDC/CI transport.
+
+The migration preserves the workspace-first ownership model: runnable code remains under `apps/`, maintenance TypeScript remains under `scripts/`, and `packages/` remains reserved for actual reuse.
+
+## Runtime Replacement
+
+The old parser accepted a single placeholder option and logged it. DeskHelm instead provides a shared Rust `read_volume`/`set_volume` core: the CLI exposes it through the required `volume` subcommand, while a native image-only AppKit status item opens a transparent borderless panel whose SwiftUI control surface calls the core through a C ABI. The old project-directory logging, custom panic hook, and compile-time Git/target version build script were removed.
+
+That replacement changes the risk profile: product correctness now depends on conservative display selection, DDC/CI packet validation, an undocumented macOS transport, C-memory ownership and panic containment, Swift confirmed-state behavior, and physical compatibility. Those contracts are detailed in [Architecture and Runtime](architecture-and-runtime.md#display-selection-and-safety), while build and test entrypoints are in [Operations](operations.md#native-app-build-and-run).
+
+## Release Reconciliation
+
+`.github/workflows/release.yml` now builds, packages, uploads, and publishes `deskhelm`. The GitHub Release job still depends on all matrix builds; crates.io publication remains independent and may run concurrently. The matrix includes Linux and Windows even though hardware operations are supported only on Apple Silicon macOS, so successful cross-platform compilation does not imply functional display control.
+
+Any future package rename must update the app directory and manifest, root metadata and lockfiles, README commands, workflow package selectors, executable/archive names, crates.io target, and owning OpenWiki pages as one change. See [Operations](operations.md#release-pipeline) for the current exact flow.
+
+## Residual Identity Checks
+
+The tracked `scripts/list-template-markers.ts` helper remains after adoption so old identity cannot silently return:
 
 ```sh
 npm ci --ignore-scripts
 cargo make list-template-markers
 ```
 
-The helper scans all tracked files through `git grep`, forwards `path:line:text` records, and does not read untracked or ignored secret-bearing files. Before Node/npm is available, use this scoped bootstrap fallback:
+A clean adopted repository should produce no marker records. The helper scans tracked files with `git grep`; it intentionally ignores untracked and ignored files. If Node/npm is unavailable, a narrowly scoped `rg` over repository source can bootstrap the same investigation, but the cargo-make task is the maintained command.
+
+Also check manually that user-facing product names, repository URLs, release paths, and OpenWiki claims use DeskHelm consistently. Generated lockfiles should be regenerated with the pinned package manager rather than edited by hand.
+
+## Knowledge Transition
+
+`openwiki/` remains the maintained knowledge surface. Update the owning source or configuration first, then run the OpenWiki generator and review its changes. No recurring OpenWiki automation is authorized. [Knowledge Maintenance](knowledge-maintenance.md#manual-regeneration) owns the review and authority rules.
+
+Generated text is not authoritative over source. Review it for unsupported claims, stale paths, and cross-page consistency.
+
+## Validation
+
+After future identity or runtime migrations, run the narrow checks while iterating and then the available full gate:
 
 ```sh
-rg -n 'name_placeholder|name-placeholder-workspace|description_placeholder|hack-ink/name_placeholder|Welcome to use' \
-  README.md Cargo.toml Cargo.lock package.json package-lock.json apps scripts .github openwiki
-```
-
-Decide the canonical Cargo package/binary name, private npm tool-package name, app directory name, repository URLs, package description, owners, and platform data identity before replacing anything.
-
-Replacement surface includes:
-
-- Root and app README files, badges, links, install/build commands, and TODO sections.
-- Root private npm tool-package identity and `package-lock.json`; regenerate the lock with the pinned npm version rather than editing it by hand.
-- Root workspace metadata, app package metadata, `Cargo.lock`, crate docs, and tests.
-- App directory name, Cargo package selectors, binary paths, and optional bundle paths.
-- `ProjectDirs` organization/application identifiers, CLI default text, and version/help expectations.
-- All GitHub workflows that refer to package names, release assets, repository identity, or path filters.
-- OpenWiki architecture, operations, adoption, and routing claims.
-
-Keep `scripts/list-template-markers.ts` after adoption. Its configured markers intentionally retain the original template identity so a fully adopted repository produces no marker records and later regressions remain visible.
-
-## 2. Define The Real Runtime Contract
-
-Read [Architecture and Runtime](architecture-and-runtime.md) and choose deliberately:
-
-- If the placeholder CLI remains structurally valid, rename it and document its real arguments and effects.
-- If commands, flags, configuration, startup, logging, errors, or panic behavior change, implement tests and replace the corresponding contract rather than preserving template prose.
-- If there is no CLI, remove/replace the app and make the true runtime surface the architecture owner.
-- If application-data identity changes, decide migration/compatibility expectations for existing local data; renaming `ProjectDirs` silently points at a different directory.
-- Keep the TypeScript marker inventory read-only and scoped to tracked files. If adoption changes its marker set, output, or exit semantics, update its integration test and the operations contract together.
-
-Do not describe placeholder behavior as product behavior after the implementation diverges.
-
-## 3. Preserve Ownership Boundaries Deliberately
-
-Default boundaries are useful but not immutable:
-
-- Keep deployable/runnable products under `apps/`.
-- Put a library under `packages/` only when it is reused or intentionally public; avoid speculative packages.
-- Add real Rust package paths to root workspace membership. Never include non-Rust package directories in Cargo merely to mirror the filesystem.
-- Keep shared versions/profiles/metadata at the root and package-specific declarations in package manifests.
-- Add new top-level owners such as `scripts/` or `artifacts/` only when they exist and have a durable boundary.
-- Keep repository-maintenance TypeScript in `scripts/`; do not move it into Cargo membership or a speculative reusable package.
-- Keep generated output and machine-local state out of tracked source and out of documentation evidence.
-
-If the project rejects this workspace model, record why in [Knowledge Maintenance](knowledge-maintenance.md#durable-decisions) or a focused decision page before future agents have to reconstruct the tradeoff.
-
-## 4. Reconcile Build And Release
-
-Update together:
-
-- `apps/<app>/build.rs` fallback/version behavior.
-- Root `final-release` profile if release needs differ.
-- Root private npm tool-package identity and its generated lockfile.
-- `.github/workflows/release.yml` package selectors, target matrix, executable names, archive names, paths, and publication target.
-- README download/install instructions and docs.rs/repository badges.
-- `Cargo.lock` after package identity/dependency changes.
-
-Check whether GitHub Release publication and registry publication should remain independent. The template runs crates.io publication without `needs: [build]`; changing that dependency is a release-policy decision, not just YAML cleanup.
-
-## 5. Migrate Knowledge Ownership
-
-`openwiki/` is the maintained knowledge surface. For every changed behavior or boundary:
-
-- Update the source/configuration that owns the claim, run `openwiki code --update --print`, and review the generated owning-page diff; use direct page edits only for explicit curation or correction.
-- Keep one canonical page per claim and link from other pages instead of copying it.
-- Preserve the accepted reason for a checked-in, agent-routable knowledge system, but use OpenWiki pages rather than recreating the legacy strict OKF lane tree.
-- Convert unresolved options into explicitly non-authoritative research notes only when there is active research.
-- Add public-safe drift evidence when a critical code/config/status alignment needs proof.
-- Keep `quickstart.md` links and any repository-level OpenWiki routing block aligned when page names or the documentation workflow changes.
-
-Do not recreate `docs/` or another knowledge root as a second authority.
-
-## 6. Validate
-
-Run narrow checks while iterating, then the full available gate:
-
-```sh
-cargo make fmt
-cargo make check
-```
-
-Also verify:
-
-```sh
+npm ci --ignore-scripts
 cargo make list-template-markers
-cargo run -p <real-package> -- --help
-cargo build -p <real-package> --profile final-release --locked
+cargo make check
+cargo run --locked -p deskhelm -- --help
+cargo build --locked -p deskhelm --profile final-release
 ```
 
-`list-template-markers` must produce no marker records after adoption. Cargo-make can still print task status. If Node/npm is not available, use the scoped `rg` fallback from step 1.
-
-Independently validate OpenWiki links, cited paths, routing from `quickstart.md`, and alignment with source. Any unresolved mismatch blocks adoption readiness; there is intentionally no `check-docs` command to substitute for this review.
-
-## Replacement Triggers
-
-Revisit this runbook when any of these occurs:
-
-- The repository is no longer a template.
-- The workspace changes from `apps/*`, gains shared packages, or changes the TypeScript scripts toolchain.
-- The CLI/runtime, app-data location, package identity, or release destinations change.
-- OpenWiki gains an authorized validation command or maintenance automation.
-- Repository automation changes what constitutes a required pre-merge or release gate.
+For hardware behavior, also run read and set operations on a supported Apple Silicon Mac and confirm the write readback. Independently verify OpenWiki links, cited paths, and routing from [Quickstart](quickstart.md); source validation does not replace documentation review.
