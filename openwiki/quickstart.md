@@ -1,72 +1,105 @@
 ---
-type: "Reference"
-title: "Repository Quickstart"
-openwiki_generated: true
+type: Getting Started Guide
+title: DeskHelm Quickstart
+description: Introduces the DeskHelm native macOS menu-bar app and shared Rust CLI, supported LG 39GX950B USB-C hardware path, build commands, and documentation map.
+tags: [deskhelm, quickstart, macos, ddc-ci]
 ---
 
-# Repository Quickstart
+# DeskHelm Quickstart
 
 ## What This Repository Is
 
-This is a Rust 2024, workspace-first monorepo **template**, not an adopted product. Its runnable Rust example is still named `name_placeholder`, its private npm tool package is still named `name-placeholder-workspace`, public metadata still says `description_placeholder`, and the README contains unfinished product, dependency, configuration, and platform sections. Treat those values as replacement markers, not product facts.
+DeskHelm is an early native macOS menu-bar prototype for controlling audio volume on an external LG display. A Rust core reads and sets DDC/CI VCP feature `0x62`; both a command-line interface and a native AppKit/SwiftUI app use that same core. DeskHelm does not invoke another display-control executable.
 
-The root workspace currently includes every Cargo package under `apps/*`. The only package is the placeholder CLI in `apps/name_placeholder/`; `packages/` is reserved for reusable libraries but contains no package yet. `scripts/` owns Node.js-executed TypeScript maintenance programs and currently contains the tracked template-marker inventory helper and its integration test. The source of truth is the implementation and configuration, with this OpenWiki as its retrieval and maintenance layer.
+The Rust package lives in `apps/deskhelm/`. Its `rlib` supports the CLI and its `staticlib` exposes a narrow C ABI to the SwiftPM package under `apps/deskhelm/macos/`. The app uses an AppKit `NSStatusItem` and transparent borderless `NSPanel` to host a SwiftUI volume panel. [Architecture and Runtime](architecture-and-runtime.md) explains that call path and the hardware safety boundary. [Operations](operations.md) owns exact build, test, staging, launch, and diagnostic commands.
 
-Sources: `README.md`, `Cargo.toml`, `rust-toolchain.toml`, `package.json`, `tsconfig.json`, `apps/name_placeholder/Cargo.toml`, `apps/name_placeholder/README.md`, `scripts/list-template-markers.ts`.
+Sources: `README.md`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/`, `apps/deskhelm/macos/`, `script/build_and_run.sh`.
 
-## Start Here
+## Requirements
 
-Prerequisites for the common local path:
+- An Apple Silicon Mac; the menu-bar app requires macOS 14 or later.
+- One external LG display with DDC/CI enabled and audio volume exposed as 0–100.
+- A cable, adapter, or dock path that passes DDC/CI traffic.
+- Xcode/Swift 6.2 for the native app build; the repository Rust toolchain for the core and CLI.
 
-- Rust via `rust-toolchain.toml` (stable, minimal profile, with Clippy).
-- Node.js via `.node-version` and npm; `npm ci --ignore-scripts` installs the exact TypeScript tool graph from `package-lock.json`.
-- `cargo-make` to invoke repository-native tasks.
-- Nightly rustfmt, Taplo, `cargo-vstyle`, and `cargo-nextest` for the complete gate.
+The verified hardware point is an LG 39GX950B (`1e6d:7863`) connected directly to an M4 Max Mac over USB-C. macOS presents its DisplayPort Alt Mode connection through an external DCP/DP service path; that software path does not change the physical connector from USB-C. Compatibility still varies by display firmware and connection path.
 
-Build and run the template CLI:
+## Run The Menu-Bar App
+
+Build the Rust core and Swift package, stage `DeskHelm.app`, and open it:
 
 ```sh
-cargo build -p name_placeholder
-cargo run -p name_placeholder -- --help
-cargo run -p name_placeholder -- --placeholder example
+./script/build_and_run.sh
 ```
 
-List tracked template markers through the TypeScript adoption helper:
+DeskHelm runs with accessory activation policy and `LSUIElement=true`, so it has no Dock icon. Select its square control-deck status icon; the item has no text title. It opens a transparent borderless nonactivating panel that sizes itself to the hosted SwiftUI content and stays within the visible screen. The first successful refresh creates a verified display session and enables the slider. Dragging updates the UI immediately and sends coalesced latest-target preview writes through that session. A preview does not replace the confirmed value. DeskHelm reads the final target back after 150 ms without new input, or immediately on release. A mismatch triggers one exact write and readback. If recovery cannot read the display, DeskHelm clears the confirmed state and disables adjustment instead of restoring an unverified old value.
+
+Confirm that the launched app created its AppKit status item:
+
+```sh
+./script/build_and_run.sh --verify
+```
+
+This verifies the app-owned status item, not whether macOS has enough visible menu-bar space. To also open the panel and verify that AppKit made it visible, key, nonactivating, and positioned on the status item's screen, run:
+
+```sh
+./script/build_and_run.sh --verify-panel
+```
+
+Neither diagnostic proves click-away dismissal, Accessibility prompting, media-key interception, HUD presentation, or physical DDC/CI behavior. On macOS 26 or later the panel uses public Liquid Glass APIs; macOS 14 through 25 use adaptive system material. See [Architecture and Runtime](architecture-and-runtime.md#native-appkit-shell) for lifecycle and state details, and [Operations](operations.md#script-modes-and-diagnostics) for the exact diagnostic contract.
+
+### Optional Keyboard Volume Keys
+
+From the panel's ellipsis menu, select **Enable Volume Keys…**. DeskHelm first confirms that it can read the display, then asks for macOS Accessibility permission; after granting access, select the command again. While enabled, each volume-up or volume-down press or system repeat moves the display by one point only when the current macOS default audio output is the one unique matching LG UltraGear DisplayPort route. Holding a key uses the existing macOS repeat events for continuous adjustment. DeskHelm coalesces rapid repeats into latest-target preview writes, confirms once after input stops, and shows an app-owned passive HUD. Mute is not intercepted.
+
+This opt-in path receives only macOS system-defined events. It consumes recognized volume-up/down events for the target display, but passes them through for Mac speakers, headphones, other displays, an ambiguous LG match, or an unreadable output route; Accessibility trust is broader than that filter. If permission is missing, macOS disables the event tap, or display communication fails, DeskHelm stops interception so later keys return to normal system handling. [Architecture and Runtime](architecture-and-runtime.md#optional-keyboard-volume-control) owns the security, routing, lifecycle, and failure contract.
+
+## Run The CLI
+
+```sh
+cargo build --locked -p deskhelm
+cargo run --locked -p deskhelm -- volume
+cargo run --locked -p deskhelm -- volume 25
+```
+
+A successful command prints `<display>: <current>/<maximum>`. Input outside 0–100 is rejected before hardware access. A set first requires maximum 100, writes the value, then reads it back and fails unless the display confirms the request. DeskHelm also stops for no external display, a non-LG display, more than one external display, or no unique matching DDC/CI service.
+
+## Validate Changes
+
+Install the locked TypeScript tool graph and run the repository aggregate:
 
 ```sh
 npm ci --ignore-scripts
-cargo make list-template-markers
-```
-
-Run the complete repository-defined source-validation aggregate:
-
-```sh
 cargo make check
 ```
 
-The gate covers Rust and TypeScript compilation, Rust/TypeScript/TOML formatting, Clippy, type-aware Oxlint, vstyle, and Rust/TypeScript tests. `Makefile.toml` declares these as composite dependencies but does not itself document their runtime ordering; use the explicit diagnostic sequence in [Operations](operations.md) when order matters. OpenWiki is reviewed with the focused drift checks in [Knowledge Maintenance](knowledge-maintenance.md#openwiki-drift-check).
+On macOS, the aggregate builds the native app and runs its Swift tests in addition to Rust and TypeScript compilation, formatting, lint, vstyle, and tests. Run only the Swift tests with:
+
+```sh
+./script/build_and_run.sh --test
+```
+
+The Swift tests cover volume-state validation, refresh outcomes, preview coalescing, automatic and release-time confirmation, stale-result protection, hardware-state recovery, media-key decoding, and one-point adjustment. Rust tests cover the CLI, session identity policy, DDC message pacing, packet behavior, and C ABI ownership. Neither suite replaces live Accessibility/event-tap checks or a physical LG 39GX950B check. [Operations](operations.md#public-check-aggregate) gives the full task contract and diagnostic sequence.
 
 ## Wiki Map
 
-- [Architecture and Runtime](architecture-and-runtime.md) — workspace ownership, CLI/bootstrap behavior, build metadata, placeholders, and generated/local state.
-- [Operations](operations.md) — every repo-native validation and build command, tooling, CI coverage, and failure interpretation.
-- [Template Adoption](template-adoption.md) — the ordered procedure for turning this template into a real repository.
-- [Knowledge Maintenance](knowledge-maintenance.md) — OpenWiki routing, claim ownership, evidence/drift rules, the migrated documentation decision, and historical context.
+- [Architecture and Runtime](architecture-and-runtime.md) - Rust core, C ABI, AppKit shell, SwiftUI panel, DDC/CI flow, and LG 39GX950B USB-C boundary.
+- [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and CLI release packaging.
+- [Template Adoption](template-adoption.md) - completed transition from the placeholder template to DeskHelm and identity consistency checks.
+- [Knowledge Maintenance](knowledge-maintenance.md) - OpenWiki routing, claim ownership, manual regeneration, evidence rules, and historical documentation decisions.
 
-## Repository Status And Boundaries
+## Repository Boundaries
 
-- `apps/` owns runnable products; `packages/` owns reusable packages shared by products. A Rust package under `packages/` is **not** a workspace member until root `Cargo.toml` deliberately includes it.
-- `scripts/` owns repository-maintenance TypeScript programs. Root `package.json`, `package-lock.json`, `tsconfig.json`, `.oxfmtrc.json`, and `.oxlintrc.json` own their runtime and validation policy.
-- Root `Cargo.toml` owns workspace membership, common package metadata, profiles, and dependency versions. Each app manifest owns package-specific metadata and dependency selection.
-- `Makefile.toml` owns local task names. `.github/workflows/language.yml` and `.github/workflows/release.yml` own current CI and release orchestration.
-- `openwiki/` is the sole maintained repository knowledge surface. Do not create a competing `docs/` or wiki root.
+- `apps/deskhelm/src/` owns the Rust core, C ABI, and CLI; `apps/deskhelm/macos/` owns the SwiftPM native app.
+- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
+- `packages/` is reserved for reusable packages. Root `Cargo.toml` owns workspace membership and shared Rust versions.
+- `Makefile.toml` owns local validation tasks. Existing GitHub workflows continue to own CI and CLI release orchestration.
+- `openwiki/` is the maintained repository knowledge surface. [Knowledge Maintenance](knowledge-maintenance.md) defines how to update it without creating competing documentation or recurring automation.
 
 ## Before Changing Anything
 
-1. Read the page that owns the affected contract.
-2. Verify exact behavior in the cited source/config; prefer source when prose conflicts.
-3. Preserve ownership boundaries and replace template placeholders consistently.
-4. Run the narrowest relevant checks, then `cargo make check` when the required external tools are available.
-5. Update the owning OpenWiki page when behavior, commands, layout, status, or workflows change; record durable rationale or drift evidence when appropriate.
-
-Use this page as the agent router and [Knowledge Maintenance](knowledge-maintenance.md) for the full update policy.
+1. Read the page that owns the affected contract and verify it against cited source.
+2. Keep the Rust API, C header, and Swift adapter aligned when changing the native boundary.
+3. Preserve strict one-display selection, 0–100 validation, preview-versus-confirmed state separation, final readback, and failure recovery unless the product contract deliberately changes.
+4. Run the narrow Rust or Swift check while iterating, then `cargo make check` when prerequisites are available.
+5. Verify hardware-affecting changes on the documented USB-C LG 39GX950B setup and record any untested boundary explicitly.

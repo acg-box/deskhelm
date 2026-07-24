@@ -1,7 +1,8 @@
 ---
-type: "Reference"
-title: "Knowledge Maintenance"
-openwiki_generated: true
+type: Documentation Governance
+title: OpenWiki Maintenance
+description: Defines OpenWiki claim ownership, source authority, manual regeneration, drift review, and documentation decision history for DeskHelm.
+tags: [openwiki, governance]
 ---
 
 # Knowledge Maintenance
@@ -10,7 +11,7 @@ openwiki_generated: true
 
 OpenWiki is the repository's concise, checked-in retrieval layer for humans and future agents. Start at [Quickstart](quickstart.md), route to the smallest page that owns the question, and verify important claims against cited implementation/configuration before changing code or documentation.
 
-This page retains the useful governance from the former strict OKF system without preserving its frontmatter and per-lane-index overhead. Source code, manifests, task definitions, and workflows remain authoritative for implemented behavior; accepted decision records own rationale; procedures own execution order; evidence owns only what it actually demonstrates.
+This page retains the useful governance from the former strict OKF lane system without preserving its per-lane index overhead. Current concept pages use lightweight OKF front matter. Source code, manifests, task definitions, and workflows remain authoritative for implemented behavior; accepted decision records own rationale; procedures own execution order; evidence owns only what it actually demonstrates. The completed product-identity transition is recorded in [Template Adoption](template-adoption.md).
 
 ## Routing And Claim Ownership
 
@@ -19,9 +20,9 @@ This page retains the useful governance from the former strict OKF system withou
 | What is this repository and where do I start? | `openwiki/quickstart.md` |
 | How are workspace/runtime boundaries implemented? | `openwiki/architecture-and-runtime.md` |
 | Which command or CI/release sequence applies? | `openwiki/operations.md` |
-| How is the template converted into a project? | `openwiki/template-adoption.md` |
+| How was the template converted into DeskHelm, and which identity surfaces stay coupled? | `openwiki/template-adoption.md` |
 | How should knowledge, rationale, research, and evidence be maintained? | This page |
-| What is the public project pitch/setup? | `README.md`, once placeholders are replaced |
+| What is the public project pitch/setup? | `README.md` |
 | What exact task runs? | `Makefile.toml` |
 
 Rules:
@@ -53,6 +54,14 @@ Then:
 6. Record a durable decision only when future maintainers would otherwise need to rediscover an accepted tradeoff.
 
 A behavior change requires updating its contract. A procedure/command change requires updating operations. A layout/ownership change requires updating architecture. Changes crossing boundaries update each owner while preserving one canonical home per claim.
+
+## Manual Regeneration
+
+After a source or configuration change affects repository knowledge, run `openwiki code --update --print`. Review the complete generated diff against the cited source authority. Direct page edits are reserved for explicit curation or correction.
+
+Generated output is not self-validating documentation. Reviewers must reject unrelated generated structure, verify concept links and front matter, and ensure `_plan.md` is absent. No recurring OpenWiki automation is authorized.
+
+Source: `AGENTS.md`.
 
 ## OpenWiki Drift Check
 
@@ -88,33 +97,30 @@ Do not treat a prose verdict as proof of command execution. Record checks actual
 **Decision and consequences:** Retain the accepted checked-in, agent-routable knowledge goal while replacing the strict lane/frontmatter machinery with five concise OpenWiki pages:
 
 - `openwiki/quickstart.md` is the single knowledge entrypoint; subject sections replace mandatory lane directories and indexes.
-- `docs/`, strict OKF frontmatter, the standalone log/evidence lanes, and `cargo make check-docs` were intentionally removed rather than left as a second authority.
+- `docs/`, strict OKF lane machinery, the standalone log/evidence lanes, and `cargo make check-docs` were intentionally removed rather than left as a second authority; OpenWiki concept pages now carry lightweight OKF front matter.
 - Readiness now requires focused manual checks of links, citations, current commands/configuration, and runtime claims. A failed or incomplete check is a documentation completion blocker even though no repo-native docs command enforces it.
-- No recurring OpenWiki automation is authorized. An untracked/generated workflow or routing file does not establish policy or current automation.
-- Generated repositories must replace template-specific OpenWiki claims when their real contracts diverge.
+- OpenWiki updates are generator-first and manually initiated. Generated changes must be checked against source authority.
+- DeskHelm has replaced the template runtime, so current product pages must not preserve placeholder behavior as fact.
 
-This migration supersedes the implementation mechanism, not the accepted rationale: checked-in routing, authority separation, public-safe evidence, and explicit promotion remain required. Replace or amend the decision if the repository approves a different knowledge root, restores machine-enforced documentation validation, authorizes recurring maintenance automation, or outgrows the five-page ownership model. Historical sources remain available in commits `7c80c51` and `69eb753`; current routing is owned by `openwiki/quickstart.md` and this corpus.
+This migration supersedes the implementation mechanism, not the accepted rationale: checked-in routing, authority separation, public-safe evidence, and explicit promotion remain required. Replace or amend the decision if the repository approves a different knowledge root, restores machine-enforced documentation validation beyond generated update pull requests, or outgrows the five-page ownership model. Historical sources remain available in commits `7c80c51` and `69eb753`; current routing is owned by `openwiki/quickstart.md` and this corpus.
 
 ## Historical Context
 
 - **2026-06-25:** commit `7c80c51` formalized the strict docs-backed OKF, added research/evidence lanes, a self-check, template-adoption runbook, and the accepted documentation decision. Commit `69eb753` later clarified structured frontmatter rules.
-- **2026-07-02:** commit `4f91ab1` moved the CLI into `apps/name_placeholder/`, created `packages/`, split root/package Cargo authority, and updated docs/release paths for the workspace-first template.
-- **Completed migration:** replaced the deleted `docs/` lanes, log, and Decodex gate with this five-page OpenWiki corpus and focused manual drift review; recurring OpenWiki automation remains unauthorized.
+- **2026-07-02:** commit `4f91ab1` moved the CLI into an app package, created `packages/`, split root/package Cargo authority, and updated docs/release paths for the workspace-first template.
+- **Completed migration:** replaced the deleted `docs/` lanes, log, and Decodex gate with this five-page OpenWiki corpus.
 - The only accepted durable decision in the migrated corpus concerns the knowledge-system foundation. The workspace layout is implemented and logged but lacks a standalone rationale record; do not invent one.
 - The legacy self-check reports `pass` with `last_verified: 2026-06-25`, predates the monorepo migration, and includes no command transcript/revision. Treat it as historical evidence, not current proof.
 
 Sources: Git history at commits `7c80c51`, `69eb753`, and `4f91ab1`.
 
-## Migration Drift Audit
+## Historical Migration Drift Audit
 
-**Status:** active evidence. **Owner:** maintainers. **Last verified:** 2026-07-22 against repository base revision `c120ab5` plus the Rust toolchain correction and TypeScript script simplification under review.
+**Status:** superseded evidence. **Owner:** maintainers. **Last verified:** 2026-07-22 against the former template state.
 
-- **Watched claims:** `openwiki/` is the only maintained knowledge root; all five pages are reachable from `quickstart.md`; task, Rust/TypeScript runtime, workspace, CI/release, adoption, decision, research, and maintenance claims match current source or identified historical evidence; no recurring OpenWiki automation is authorized.
-- **Evidence anchors:** `README.md`, `Cargo.toml`, `rust-toolchain.toml`, `Makefile.toml`, app source/manifests, `.node-version`, `package.json`, `package-lock.json`, `tsconfig.json`, Oxc configuration, TypeScript scripts/tests, tracked workflows, `.gitignore`, `.taplo.toml`, and the five OpenWiki pages.
-- **Checks run (2026-07-22):** Markdown link resolution passed; all 25 `Makefile.toml` tasks matched the documented task matrix; the project file selected the ordinary stable Rust toolchain and nightly rustfmt remained explicit; the TypeScript format, compiler, type-aware lint, and two integration tests passed; Rust/TOML format, Cargo check, Clippy/vstyle, and nextest passed; npm audit reported no vulnerability record in the resolved graph; npm verified registry signatures for all 11 installed packages and attestations for eight; `actionlint`, `taplo fmt --check`, and `git diff --check` passed; and `openwiki/_plan.md` was absent. `openwiki code --update --print` was attempted after source updates but stopped after proposing an unauthorized scheduled workflow, a parallel index, and incompatible generated metadata. Those outputs were rejected, and the five existing pages were curated directly under the documented fallback policy.
-- **Recommended reverse checks:** after relevant changes, resolve Markdown links; compare task names/dependencies with `Makefile.toml`; compare workflow triggers/jobs/`needs` with tracked YAML; compare Rust runtime claims with `main.rs`, `cli.rs`, and `build.rs`; compare TypeScript runtime claims with `.node-version`, manifests/configuration, scripts, and tests; scan for stale `docs/`, `check-docs`, scheduled-automation, duplicate formatter, and placeholder claims; run `actionlint`, dependency-integrity checks, `git diff --check`, and applicable source checks; verify `openwiki/_plan.md` is absent after generation.
-- **Verdict:** pass for the current Rust/TypeScript template diff and the checks recorded above. The npm signature/attestation result covers packages installed on macOS arm64; Linux CI remains the independent platform check for its selected native binaries.
-- **Required updates:** rerun the reverse checks after changes to source/config, page routing, knowledge authority, validation, or automation policy. Any mismatch blocks documentation readiness.
+The recorded migration audit passed Markdown links, task alignment, source checks, dependency checks, `actionlint`, `taplo fmt --check`, and `git diff --check` for the then-current template. It predates the DeskHelm runtime and is not proof for the current worktree.
+
+For current changes, resolve Markdown links; compare tasks with `Makefile.toml`; compare workflow triggers, jobs, and dependencies with tracked YAML; compare Rust runtime and C ABI claims with `apps/deskhelm/src/lib.rs`, `apps/deskhelm/src/ffi.rs`, `apps/deskhelm/src/main.rs`, `apps/deskhelm/src/cli.rs`, and `apps/deskhelm/src/display.rs`; compare DDC/CI claims with `apps/deskhelm/src/display/macos.rs`; compare native status icon and window-lifecycle claims with `apps/deskhelm/macos/Sources/DeskHelmMac/App/DeskHelmStatusIcon.swift` and `StatusItemController.swift`; compare glass-surface and slider-state claims with `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumePanel.swift`, `Stores/VolumeStore.swift`, and their Swift tests; compare build claims with `script/build_and_run.sh` and `Makefile.toml`; scan for stale current-state placeholder claims; run applicable source and workflow checks; and verify `openwiki/_plan.md` is absent after generation.
 
 ## Durable Decisions
 
@@ -132,5 +138,5 @@ Promotion must name and update a real contract, procedure, current-state referen
 
 - `openwiki/` is the only repository knowledge root; `docs/` and its Decodex task no longer exist.
 - `.github/workflows/language.yml` does not validate OpenWiki. Review links, source citations, commands, routing, and drift explicitly when knowledge changes.
-- No recurring OpenWiki workflow is authorized. Run `openwiki code --update --print` only when repository knowledge needs regeneration, then review every generated change against source authority.
-- Revisit this policy when OpenWiki validation or maintenance automation is explicitly approved, or when page ownership changes.
+- OpenWiki regeneration is manual. Maintainers review every generated change against source authority.
+- Revisit this policy when OpenWiki gains validation beyond generation or when page ownership changes.

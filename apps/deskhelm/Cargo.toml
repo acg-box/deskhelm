@@ -1,0 +1,29 @@
+[package]
+authors.workspace     = true
+categories            = []
+description.workspace = true
+edition.workspace     = true
+homepage.workspace    = true
+keywords              = []
+license.workspace     = true
+name                  = "deskhelm"
+readme                = "README.md"
+repository.workspace  = true
+version.workspace     = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+# crates.io
+clap       = { workspace = true }
+color-eyre = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# crates.io
+core-foundation-sys = { workspace = true }
+core-graphics       = { workspace = true }
+io-kit-sys          = { workspace = true }
