@@ -67,7 +67,7 @@ public struct VolumePanel: View {
 
       Spacer()
 
-      if store.isBusy {
+      if store.showsInitialLoadingIndicator {
         ProgressView()
           .controlSize(.small)
           .accessibilityLabel("Communicating with display")
@@ -155,6 +155,7 @@ public struct VolumePanel: View {
         .font(.body.monospacedDigit().weight(isEditing ? .semibold : .regular))
         .foregroundStyle(isEditing ? .primary : .secondary)
         .frame(width: 30, alignment: .trailing)
+        .contentTransition(.numericText(value: store.draftLevel))
         .accessibilityHidden(true)
         .accessibilityIdentifier("draft-volume")
     }
