@@ -1,6 +1,7 @@
 import AppKit
 import DeskHelmAppCore
 import OSLog
+import SwiftUI
 
 @MainActor
 final class VolumeKeyController {
@@ -11,6 +12,7 @@ final class VolumeKeyController {
   private let store: VolumeStore
   private let state: VolumeKeyFeatureState
   private let hud: VolumeHUDController
+  private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = MediaKeyMonitor(
     onAction: { [weak self] action in
       self?.receive(action)
@@ -66,6 +68,7 @@ final class VolumeKeyController {
   func invalidate() {
     monitor.stop()
     hud.invalidate()
+    lastLevelUpdateUptime = nil
     store.communicationFailureHandler = nil
   }
 
@@ -103,6 +106,7 @@ final class VolumeKeyController {
   private func disable() {
     monitor.stop()
     hud.invalidate()
+    lastLevelUpdateUptime = nil
     UserDefaults.standard.set(false, forKey: Self.preferenceKey)
     state.update(to: .disabled)
     logger.notice("Keyboard volume control disabled.")
@@ -138,13 +142,25 @@ final class VolumeKeyController {
       current: baseline,
       maximum: store.maximumLevel
     )
-    store.updateDraft(Double(target))
-    store.queueDraftApply()
-    hud.show(level: target)
+    let updateUptime = ProcessInfo.processInfo.systemUptime
+    let animationPlan = VolumeLevelAnimationPolicy.plan(
+      previousUpdateUptime: lastLevelUpdateUptime,
+      currentUpdateUptime: updateUptime,
+      isVisible: true,
+      reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+      animatesFirstUpdate: true
+    )
+    lastLevelUpdateUptime = updateUptime
+    animationPlan.perform {
+      store.updateDraft(Double(target))
+      store.queueDraftApply()
+    }
+    hud.show(level: target, updateUptime: updateUptime)
   }
 
   private func fail(_ message: String) {
     monitor.stop()
+    lastLevelUpdateUptime = nil
     UserDefaults.standard.set(false, forKey: Self.preferenceKey)
     state.update(to: .failed(message))
     hud.show(error: message)

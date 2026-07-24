@@ -5,6 +5,31 @@ import Testing
 
 @Suite("Volume store")
 struct VolumeStoreTests {
+  @Test("Only an unresolved initial read shows the loading indicator")
+  @MainActor
+  func initialLoadingIndicator() async {
+    let readGate = TestGate()
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      readGates: [0: readGate]
+    )
+    let store = VolumeStore(controller: controller)
+
+    let refresh = Task { @MainActor in
+      await store.refresh()
+    }
+    await waitForReadCount(1, controller: controller)
+
+    #expect(store.isBusy)
+    #expect(store.showsInitialLoadingIndicator)
+
+    await readGate.open()
+    await refresh.value
+
+    #expect(!store.isBusy)
+    #expect(!store.showsInitialLoadingIndicator)
+  }
+
   @Test("Draft volume remains smooth and clamps to the supported range")
   @MainActor
   func smoothDraft() {
@@ -129,6 +154,8 @@ struct VolumeStoreTests {
 
     #expect(store.confirmedLevel == 24)
     #expect(store.draftLevel == 35)
+    #expect(store.isBusy)
+    #expect(!store.showsInitialLoadingIndicator)
 
     await waitForPreviewCount(2, controller: controller)
     #expect(await controller.previewedLevels() == [25, 35])
