@@ -1,210 +1,177 @@
+<div align="center">
+
 # DeskHelm
 
-DeskHelm is an early native macOS menu bar prototype for an external LG
-display. A Rust core reads and sets display audio volume through DDC/CI. A
-command-line interface and a native menu bar app use the same core.
+Native macOS menu-bar volume control for an external LG display.
 
-DeskHelm does not invoke another display-control command-line tool.
+[![License](https://img.shields.io/badge/License-GPLv3%20only-blue.svg)](https://spdx.org/licenses/GPL-3.0-only.html)
+[![Docs](https://img.shields.io/docsrs/deskhelm)](https://docs.rs/deskhelm)
+[![Language Checks](https://github.com/acg-box/deskhelm/actions/workflows/language.yml/badge.svg?branch=main)](https://github.com/acg-box/deskhelm/actions/workflows/language.yml)
+[![Release](https://github.com/acg-box/deskhelm/actions/workflows/release.yml/badge.svg)](https://github.com/acg-box/deskhelm/actions/workflows/release.yml)
+[![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/acg-box/deskhelm)](https://github.com/acg-box/deskhelm/tags)
+[![GitHub last commit](https://img.shields.io/github/last-commit/acg-box/deskhelm?color=red&style=plastic)](https://github.com/acg-box/deskhelm)
 
-## Requirements
+</div>
 
-- An Apple Silicon Mac.
-- macOS 14 or later for the menu bar app.
-- One external LG display whose DDC/CI audio volume (VCP code `0x62`) reports
-  the range 0–100.
-- DDC/CI enabled in the display settings.
-- A connection path that passes DDC/CI traffic. Some docks and adapters block it.
+## Feature Highlights
 
-## Run The App
+### Native LG Display Volume Control
 
-Build the Rust core and SwiftUI app, stage `DeskHelm.app`, and open it:
+DeskHelm provides an AppKit and SwiftUI menu-bar app and a Rust CLI that share
+one direct DDC/CI core. It controls display audio volume through VCP feature
+`0x62` without another display-control executable. The app keeps preview writes
+separate from confirmed hardware readback and can optionally route macOS volume
+keys to the supported LG output.
+
+## Status
+
+DeskHelm is an early Apple Silicon macOS prototype. The verified hardware point
+is an LG 39GX950B connected directly to an M4 Max Mac through USB-C. Display
+firmware, cables, adapters, and docks can change DDC/CI compatibility.
+
+## Workspace Posture
+
+- `apps/deskhelm/` owns the shared Rust core, CLI, and C ABI.
+- `apps/deskhelm/macos/` owns the native AppKit and SwiftUI menu-bar app.
+- `script/` owns native build and diagnostic commands, while `scripts/` owns
+  repository-maintenance TypeScript programs.
+- `packages/` is reserved for reusable shared packages.
+- The root `Cargo.toml` owns Rust workspace metadata, profiles, and dependency
+  versions.
+- The root `package.json`, `package-lock.json`, and `tsconfig.json` own the
+  TypeScript maintenance toolchain and its exact development dependencies.
+- `openwiki/` is the authoritative repository knowledge and agent-routing
+  surface.
+
+## Usage
+
+### Installation
+
+#### Build from Source
+
+The native app requires an Apple Silicon Mac, macOS 14 or later, and Xcode with
+Swift 6.2. The display must expose DDC/CI audio volume as a 0–100 range.
 
 ```sh
+# Clone the repository.
+git clone https://github.com/acg-box/deskhelm
+cd deskhelm
+
+# Build the Rust CLI.
+cargo build --locked -p deskhelm
+
+# Build, stage, and open the native menu-bar app.
 ./script/build_and_run.sh
 ```
 
-DeskHelm runs as a menu-bar-only app and does not add a Dock icon. Select the
-DeskHelm control-deck icon to open the volume panel. The status item has no text
-label. The transparent, borderless, nonactivating panel can accept input without
-taking focus from the current app. On macOS 26 or later, it hosts one surface
-made with the public Liquid Glass APIs. Older supported macOS versions use one
-adaptive system material surface.
+#### Download Pre-built Binary
 
-To rebuild, launch, and confirm that DeskHelm created its AppKit status item:
+- **macOS**
+    - Tagged releases publish the CLI through [GitHub Releases](https://github.com/acg-box/deskhelm/releases/latest). Build the native menu-bar app from source.
+- **Windows**
+    - Tagged releases publish a CLI archive, but display control is not implemented on Windows.
+- **Unix**
+    - Tagged releases publish a Linux CLI archive, but display control is not implemented on Linux.
 
-```sh
-./script/build_and_run.sh --verify
-```
+### Configuration
 
-This diagnostic checks the app-owned status item. Menu bar space, a display
-notch, or a third-party menu bar manager can still affect what macOS shows.
+#### Optional Volume Keys
 
-To also open the panel and verify that AppKit made it visible, key, nonactivating,
-and positioned on the status item's screen:
+Open the panel's ellipsis menu and select **Enable Volume Keys…**. DeskHelm asks
+for macOS Accessibility permission and intercepts volume-up and volume-down only
+when the default audio output uniquely matches the supported LG display. Set
+`DESKHELM_CODE_SIGN_IDENTITY` to an authorized Apple Development identity when
+Accessibility authorization must persist across rebuilds.
 
-```sh
-./script/build_and_run.sh --verify-panel
-```
+### Interaction
 
-The panel reads the confirmed display volume when it opens and retains that
-verified display session. Moving the slider updates the UI immediately. DeskHelm
-coalesces rapid movement into native DDC/CI preview writes. A preview reports
-only that macOS accepted the transport request; it does not replace the last
-confirmed value. DeskHelm reads the value back after 150 ms without new input,
-or immediately when the slider is released. If the value differs, DeskHelm
-performs one exact write and readback. A failed preview or confirmation triggers
-a fresh hardware read. A failed refresh or recovery read marks the display
-unavailable instead of showing an old value as current.
+Select the DeskHelm menu-bar icon to open the volume panel. Drag the control, use
+the arrow keys, or use the VoiceOver adjustable action. DeskHelm coalesces rapid
+preview writes and confirms the final target through hardware readback.
 
-The custom volume control supports pointer dragging, the arrow keys, and the
-VoiceOver adjustable action. If you select refresh during an active preview or
-confirmation, DeskHelm queues one read instead of flashing or ignoring the
-request.
-
-### Optional Keyboard Volume Keys
-
-Open the ellipsis menu in the panel and select **Enable Volume Keys…**. DeskHelm
-first confirms that it can read the display, then asks macOS for Accessibility
-permission. After you grant access, select **Enable Volume Keys…** again.
-
-While the feature is enabled, DeskHelm checks the current macOS default audio
-output for every recognized volume event. It consumes the event only when the
-output is the LG UltraGear display. Each accepted press or system repeat adjusts
-the display by one point. Holding a key uses the existing macOS key-repeat events
-for continuous adjustment. Each accepted event updates the visible volume
-surface and queues the latest preview target. One readback follows after input
-stops.
-
-The HUD does not accept mouse input. It is an app-owned surface, not Apple's
-private system volume OSD. On macOS 26 or later, its SwiftUI content uses one
-public `.clear.interactive()` Liquid Glass surface. The nonactivating panel
-temporarily becomes the key window while the HUD is visible. This keeps the
-clear, refractive glass appearance instead of the opaque inactive-window
-appearance. The HUD does not leave its content view as first responder or show a
-keyboard focus ring. The panel orders out after 1.25 seconds without new input.
-Opening the menu panel dismisses a visible HUD. While the menu panel is open,
-volume keys animate its control directly and do not open a second key window.
-
-The menu control derives its track, thumb, and number from one animated level.
-The HUD derives its progress, speaker symbol, and number from one animated
-level. Number columns roll independently: a normal step changes only the ones
-place, while a carry or borrow also changes the affected higher place. During a
-held key, each linear segment uses the preceding repeat interval as its duration.
-This removes the dead time between one-point targets and keeps the visual value
-separate from the immediate DDC/CI target. Reduce Motion makes the update
-immediate.
-
-For Bluetooth headphones, Mac speakers, and all other outputs, DeskHelm returns
-the event unchanged so macOS can adjust that device normally. A Core Audio query
-failure or more than one matching LG UltraGear audio endpoint also returns the
-event unchanged. The feature is off by default. It subscribes to macOS
-system-defined events only and does not subscribe to ordinary key-down or key-up
-events, retain input, or inspect other apps. macOS still grants broad
-Accessibility trust, so enable the feature only if you accept that permission
-scope.
-
-If permission is missing, macOS disables the event filter, or DDC/CI
-communication fails, DeskHelm removes the filter. Later key presses then return
-to normal macOS handling. DeskHelm does not intercept the mute key in this
-version.
-
-## Run The CLI
-
-Build the Rust core and CLI:
-
-```sh
-cargo build --locked -p deskhelm
-```
-
-Read the current display volume:
+Use the CLI to read or set the display volume:
 
 ```sh
 cargo run --locked -p deskhelm -- volume
-```
-
-Set the display volume to a value from 0 through 100:
-
-```sh
 cargo run --locked -p deskhelm -- volume 25
 ```
 
-The set command reads the volume before it writes. It refuses to write if the
-display does not report a 0–100 range. It then reads the value back and reports
-an error if the display does not confirm it. DeskHelm rejects values outside
-0–100 before it contacts the display.
+### Update
 
-DeskHelm stops if the connected display is not LG, if it cannot match the
-display to a DDC/CI service through its EDID, or if display or service selection
-is ambiguous.
+Pull the latest `main` branch and rebuild the selected interface:
 
-## Architecture
-
-An AppKit `NSStatusItem` and transparent borderless `NSPanel` own the
-menu-bar-only lifecycle and host the SwiftUI volume panel. The window has no
-second background or popover chrome. The panel calls a narrow C ABI in the Rust
-static library. The Rust core uses Core Graphics for display identity and the
-macOS IOKit display service for DDC/CI transport. It reads and writes only VCP
-code `0x62`, which is the display audio-volume control.
-
-The optional keyboard path uses an active Core Graphics session event tap. Its
-callback only classifies system-defined events; the main actor owns DDC/CI work,
-write coalescing, feature state, and the transient HUD. DeskHelm uses no helper
-CLI, private system-OSD call, Finder automation, or browser automation.
-
-The app supplies its own native volume control. It does not make the disabled
-volume slider in macOS Control Center adjustable. That slider belongs to the
-Core Audio device model. Integrating there would require a separate Core Audio
-HAL plug-in and a different installation, signing, and compatibility scope.
-
-## Limitations
-
-- DeskHelm uses the undocumented macOS `IOAVService` interface. A macOS update
-  can change or remove this interface.
-- Apple does not document the packed media-key payload used by the event
-  decoder. Keyboard control is therefore an opt-in compatibility feature that
-  needs physical testing after macOS or keyboard changes.
-- DeskHelm cannot invoke Apple's genuine volume OSD through a public API. Its
-  transient HUD uses public AppKit and SwiftUI surfaces. It temporarily takes
-  key-window status to preserve the clear, refractive Liquid Glass appearance.
-  Apple can change this appearance or its focus behavior in a macOS update.
-- Local app staging uses ad-hoc signing by default. Set an Apple Development
-  identity to retain Accessibility authorization across rebuilds. A distributed
-  build still needs a Developer ID signature and notarization.
-- The SwiftUI app controls the display directly. It does not register the
-  display as a Core Audio output device, and this version does not map the mute
-  key to monitor state.
-- The current implementation supports Apple Silicon only and uses the standard
-  DDC/CI I2C address `0x37`. Apple display paths that require another address,
-  including some built-in HDMI bridges, are not supported.
-- The hardware check uses an LG 39GX950B with vendor/product ID `1e6d:7863`.
-  The display is connected directly to an M4 Max Mac through USB-C. macOS
-  exposes its DisplayPort Alt Mode link through the external DCP/DP service
-  path; this does not mean that the physical connector is DisplayPort.
-- DDC/CI support and response timing vary by display, cable, adapter, and dock.
-- Interactive writes are faster than hardware readback, so the UI and requested
-  volume can move before the app has confirmed the display value. DeskHelm keeps
-  the latest draft visible and confirms it after input stops.
-- This version controls only volume. It does not change brightness, input
-  source, or other display settings.
+```sh
+git pull --ff-only
+./script/build_and_run.sh
+cargo build --locked -p deskhelm
+```
 
 ## Development
 
-Run the repository validation gate:
+Install the exact TypeScript development graph without running package lifecycle
+scripts:
 
 ```sh
 npm ci --ignore-scripts
+```
+
+List tracked template markers:
+
+```sh
+cargo make list-template-markers
+```
+
+Run the complete Rust, Swift, TypeScript, and TOML validation gate:
+
+```sh
 cargo make check
 ```
 
-On macOS, this gate also builds the menu bar app and runs its Swift tests. Run
-only the Swift tests with:
+### Architecture
 
-```sh
-./script/build_and_run.sh --test
-```
+DeskHelm is a workspace-first monorepo:
 
-The native build script uses `/Applications/Xcode-beta.app` and ad-hoc signing
-by default. Set `DESKHELM_CODE_SIGN_IDENTITY` to an authorized Apple Development
-identity when Accessibility authorization must persist across rebuilds.
+- the Rust core, CLI, and C ABI belong under `apps/deskhelm/`
+- the native macOS app belongs under `apps/deskhelm/macos/`
+- repository-maintenance programs belong under `scripts/`
+- repository-native checks are exposed through `Makefile.toml`
+- durable architecture, runbook, and routing notes belong under `openwiki/`
 
-The source is licensed under [GPL-3.0-only](LICENSE).
+## Support Me
+
+If you find this project helpful and would like to support its development, you can buy me a coffee!
+
+Your support is greatly appreciated and motivates me to keep improving this project.
+
+- **Fiat**
+    - [Ko-fi](https://ko-fi.com/hack_ink)
+    - [Afdian](https://afdian.com/a/hack_ink)
+- **Crypto**
+    - **Bitcoin**
+        - `bc1pedlrf67ss52md29qqkzr2avma6ghyrt4jx9ecp9457qsl75x247sqcp43c`
+    - **Ethereum**
+        - `0x3e25247CfF03F99a7D83b28F207112234feE73a6`
+    - **Polkadot**
+        - `156HGo9setPcU2qhFMVWLkcmtCEGySLwNqa3DaEiYSWtte4Y`
+
+Thank you for your support!
+
+## Appreciation
+
+We would like to extend our heartfelt gratitude to the following projects and contributors:
+
+- The Rust community for their continuous support and development of the Rust ecosystem.
+
+## Additional Acknowledgements
+
+- TODO
+
+---
+
+<div align="right">
+
+### License
+
+<sup>Licensed under [GPL-3.0-only](LICENSE).</sup>
+
+</div>
