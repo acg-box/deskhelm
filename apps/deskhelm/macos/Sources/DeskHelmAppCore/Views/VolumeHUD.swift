@@ -35,39 +35,6 @@ public struct VolumeHUD: View {
     self.state = state
   }
 
-  public var body: some View {
-    singleGlassSurface
-      .padding(8)
-      .environment(\.appearsActive, true)
-  }
-
-  @ViewBuilder
-  private var singleGlassSurface: some View {
-    if #available(macOS 26.0, *) {
-      GlassEffectContainer(spacing: 0) {
-        VolumeHUDContentLayer(state: state)
-          .glassEffect(
-            .clear.interactive(false),
-            in: Capsule()
-          )
-      }
-    } else {
-      VolumeHUDContentLayer(state: state)
-        .background(
-          .regularMaterial,
-          in: Capsule()
-        )
-    }
-  }
-}
-
-public struct VolumeHUDContentLayer: View {
-  @Bindable private var state: VolumeHUDState
-
-  public init(state: VolumeHUDState) {
-    self.state = state
-  }
-
   @ViewBuilder
   public var body: some View {
     switch state.content {

@@ -69,11 +69,13 @@ the display by one point. Holding a key uses the existing macOS key-repeat event
 for continuous adjustment. Each accepted event updates the HUD and queues the
 latest preview target. One readback follows after input stops.
 The HUD does not take keyboard focus or accept mouse input. It is an app-owned
-surface, not Apple's private system volume OSD. On macOS 26 or later, a native
-SwiftUI surface requests the public clear Liquid Glass style and an active
-appearance without making the passive panel a key window. Its progress bar and
-direction-aware rolling number share one short system animation. Reduce Motion
-disables that transition.
+surface, not Apple's private system volume OSD. On macOS 26 or later, a public
+AppKit `NSGlassEffectView` uses the clear Liquid Glass style and owns the SwiftUI
+content inside its `contentView`. The passive panel does not become a key window.
+Its progress bar and direction-aware rolling number share one short linear
+transaction. During a held key, each transaction finishes before the next repeat
+when cadence stays stable, which prevents the fixed-duration animation backlog.
+Reduce Motion makes the update immediate.
 
 For Bluetooth headphones, Mac speakers, and all other outputs, DeskHelm returns
 the event unchanged so macOS can adjust that device normally. A Core Audio query

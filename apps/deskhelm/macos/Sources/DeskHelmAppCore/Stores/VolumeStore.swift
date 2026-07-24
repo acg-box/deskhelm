@@ -31,6 +31,10 @@ public final class VolumeStore {
     confirmedLevel != nil
   }
 
+  var showsInitialLoadingIndicator: Bool {
+    isBusy && confirmedLevel == nil && errorMessage == nil
+  }
+
   public var sliderRange: ClosedRange<Double> {
     0...Double(max(maximumLevel, 1))
   }
