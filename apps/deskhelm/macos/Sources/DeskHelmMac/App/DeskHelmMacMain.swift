@@ -28,6 +28,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     do {
+      let launchActions = DeskHelmLaunchPlan.actions(
+        arguments: CommandLine.arguments
+      )
       let store = VolumeStore(controller: DeskHelmCore())
       let volumeKeyState = VolumeKeyFeatureState()
       let volumeKeyController = VolumeKeyController(
@@ -44,14 +47,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       self.volumeKeyController = volumeKeyController
       statusItemController = controller
       publishReadyState(for: controller)
-      if !CommandLine.arguments.contains("--verify-panel") {
-        volumeKeyController.restoreIfRequested()
-      }
 
-      if CommandLine.arguments.contains("--verify-panel") {
-        Task { @MainActor in
-          await Task.yield()
-          controller.showPanelForVerification()
+      for action in launchActions {
+        switch action {
+        case .restoreRequestedVolumeKeys:
+          volumeKeyController.restoreIfRequested()
+        case .showPanelForVerification:
+          Task { @MainActor in
+            await Task.yield()
+            controller.showPanelForVerification()
+          }
         }
       }
     } catch {
