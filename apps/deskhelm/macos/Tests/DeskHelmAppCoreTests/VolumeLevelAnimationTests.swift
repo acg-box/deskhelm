@@ -54,7 +54,7 @@ struct VolumeLevelAnimationTests {
     )
   }
 
-  @Test("Continuous input completes a short linear animation before the next update")
+  @Test("Continuous input uses the full event cadence without a dead zone")
   func continuousInput() {
     let plan = VolumeLevelAnimationPolicy.plan(
       previousUpdateUptime: 1,
@@ -68,8 +68,7 @@ struct VolumeLevelAnimationTests {
       return
     }
 
-    #expect(abs(duration - 0.03) < 0.000_1)
-    #expect(duration < 0.05)
+    #expect(abs(duration - 0.05) < 0.000_1)
     #expect(isContinuous)
   }
 

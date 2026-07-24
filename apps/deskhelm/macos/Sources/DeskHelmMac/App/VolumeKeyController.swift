@@ -12,6 +12,7 @@ final class VolumeKeyController {
   private let store: VolumeStore
   private let state: VolumeKeyFeatureState
   private let hud: VolumeHUDController
+  private var shouldPresentHUD: () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = MediaKeyMonitor(
     onAction: { [weak self] action in
@@ -70,6 +71,16 @@ final class VolumeKeyController {
     hud.invalidate()
     lastLevelUpdateUptime = nil
     store.communicationFailureHandler = nil
+  }
+
+  func setHUDPresentationCondition(
+    _ condition: @escaping () -> Bool
+  ) {
+    shouldPresentHUD = condition
+  }
+
+  func dismissHUD() {
+    hud.invalidate()
   }
 
   private func enable(requestPermission: Bool) async {
@@ -155,7 +166,9 @@ final class VolumeKeyController {
       store.updateDraft(Double(target))
       store.queueDraftApply()
     }
-    hud.show(level: target, updateUptime: updateUptime)
+    if shouldPresentHUD() {
+      hud.show(level: target, updateUptime: updateUptime)
+    }
   }
 
   private func fail(_ message: String) {
@@ -163,7 +176,9 @@ final class VolumeKeyController {
     lastLevelUpdateUptime = nil
     UserDefaults.standard.set(false, forKey: Self.preferenceKey)
     state.update(to: .failed(message))
-    hud.show(error: message)
+    if shouldPresentHUD() {
+      hud.show(error: message)
+    }
     logger.error("Keyboard volume control stopped: \(message, privacy: .public)")
   }
 
