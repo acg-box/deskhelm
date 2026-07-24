@@ -30,6 +30,7 @@ pub struct VolumeReading {
 	maximum: u16,
 }
 impl VolumeReading {
+	#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 	pub(crate) fn new(display: String, current: u16, maximum: u16) -> Self {
 		Self { display, current, maximum }
 	}
