@@ -427,7 +427,7 @@ fn validate_supported_maximum(maximum: u16) -> Result<()> {
 
 fn validate_requested_level(level: u8) -> Result<()> {
 	if level > 100 {
-		eyre::bail!("Volume level {level} is outside the supported 0–100 range.");
+		color_eyre::eyre::bail!("Volume level {level} is outside the supported 0–100 range.");
 	}
 
 	Ok(())
