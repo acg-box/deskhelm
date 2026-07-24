@@ -48,7 +48,7 @@ package enum VolumeLevelAnimationPolicy {
 
     if interval <= continuousInputThreshold {
       return .linear(
-        duration: min(maximumContinuousDuration, interval * 0.6),
+        duration: interval,
         isContinuous: true
       )
     }
@@ -61,6 +61,5 @@ package enum VolumeLevelAnimationPolicy {
 
   private static let minimumAnimatedInterval: TimeInterval = 0.018
   private static let continuousInputThreshold: TimeInterval = 0.12
-  private static let maximumContinuousDuration: TimeInterval = 0.05
   private static let isolatedUpdateDuration: TimeInterval = 0.08
 }

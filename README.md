@@ -56,6 +56,11 @@ performs one exact write and readback. A failed preview or confirmation triggers
 a fresh hardware read. A failed refresh or recovery read marks the display
 unavailable instead of showing an old value as current.
 
+The custom volume control supports pointer dragging, the arrow keys, and the
+VoiceOver adjustable action. If you select refresh during an active preview or
+confirmation, DeskHelm queues one read instead of flashing or ignoring the
+request.
+
 ### Optional Keyboard Volume Keys
 
 Open the ellipsis menu in the panel and select **Enable Volume Keys…**. DeskHelm
@@ -66,16 +71,25 @@ While the feature is enabled, DeskHelm checks the current macOS default audio
 output for every recognized volume event. It consumes the event only when the
 output is the LG UltraGear display. Each accepted press or system repeat adjusts
 the display by one point. Holding a key uses the existing macOS key-repeat events
-for continuous adjustment. Each accepted event updates the HUD and queues the
-latest preview target. One readback follows after input stops.
-The HUD does not take keyboard focus or accept mouse input. It is an app-owned
-surface, not Apple's private system volume OSD. On macOS 26 or later, a public
-AppKit `NSGlassEffectView` uses the clear Liquid Glass style and owns the SwiftUI
-content inside its `contentView`. The passive panel does not become a key window.
-Its progress bar and direction-aware rolling number share one short linear
-transaction. During a held key, each transaction finishes before the next repeat
-when cadence stays stable, which prevents the fixed-duration animation backlog.
-Reduce Motion makes the update immediate.
+for continuous adjustment. Each accepted event updates the visible volume
+surface and queues the latest preview target. One readback follows after input
+stops.
+
+The HUD does not accept mouse input. It is an app-owned surface, not Apple's
+private system volume OSD. On macOS 26 or later, its SwiftUI content uses one
+public `.clear.interactive()` Liquid Glass surface. The nonactivating panel
+temporarily becomes the key window while the HUD is visible. This keeps the
+clear, refractive glass appearance instead of the opaque inactive-window
+appearance. The panel orders out after 1.25 seconds without new input.
+Opening the menu panel dismisses a visible HUD. While the menu panel is open,
+volume keys animate its control directly and do not open a second key window.
+
+The menu control derives its track, thumb, and number from one animated level.
+The HUD derives its progress, speaker symbol, and number from one animated
+level. During a held key, each linear segment uses the preceding repeat interval
+as its duration. This removes the dead time between one-point targets and keeps
+the visual value separate from the immediate DDC/CI target. Reduce Motion makes
+the update immediate.
 
 For Bluetooth headphones, Mac speakers, and all other outputs, DeskHelm returns
 the event unchanged so macOS can adjust that device normally. A Core Audio query
@@ -131,7 +145,7 @@ code `0x62`, which is the display audio-volume control.
 
 The optional keyboard path uses an active Core Graphics session event tap. Its
 callback only classifies system-defined events; the main actor owns DDC/CI work,
-write coalescing, feature state, and the passive HUD. DeskHelm uses no helper
+write coalescing, feature state, and the transient HUD. DeskHelm uses no helper
 CLI, private system-OSD call, Finder automation, or browser automation.
 
 The app supplies its own native volume control. It does not make the disabled
@@ -147,9 +161,9 @@ HAL plug-in and a different installation, signing, and compatibility scope.
   decoder. Keyboard control is therefore an opt-in compatibility feature that
   needs physical testing after macOS or keyboard changes.
 - DeskHelm cannot invoke Apple's genuine volume OSD through a public API. Its
-  transient HUD uses public AppKit and SwiftUI surfaces. Apple does not document
-  cross-window Liquid Glass sampling for a standalone overlay panel, so its
-  refraction can differ from Control Center or other system-owned surfaces.
+  transient HUD uses public AppKit and SwiftUI surfaces. It temporarily takes
+  key-window status to preserve the clear, refractive Liquid Glass appearance.
+  Apple can change this appearance or its focus behavior in a macOS update.
 - Local app staging uses ad-hoc signing by default. Set an Apple Development
   identity to retain Accessibility authorization across rebuilds. A distributed
   build still needs a Developer ID signature and notarization.

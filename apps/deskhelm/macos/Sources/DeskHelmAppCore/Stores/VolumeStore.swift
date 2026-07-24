@@ -14,7 +14,9 @@ public final class VolumeStore {
 
   private let controller: any VolumeControlling
   @ObservationIgnored private var draftRevision: UInt = 0
-  @ObservationIgnored private var isRefreshing = false
+  private var isRefreshing = false
+  private var isRefreshRequested = false
+  @ObservationIgnored private var refreshRequestTask: Task<Void, Never>?
   @ObservationIgnored private var pendingPreview: PendingWrite?
   @ObservationIgnored private var previewInFlight: PendingWrite?
   @ObservationIgnored private var previewWorker: Task<Void, Never>?
@@ -31,6 +33,10 @@ public final class VolumeStore {
     confirmedLevel != nil
   }
 
+  public var isRefreshInProgress: Bool {
+    isRefreshing || isRefreshRequested
+  }
+
   var showsInitialLoadingIndicator: Bool {
     isBusy && confirmedLevel == nil && errorMessage == nil
   }
@@ -44,6 +50,27 @@ public final class VolumeStore {
     draftRevision &+= 1
   }
 
+  public func requestRefresh() {
+    guard refreshRequestTask == nil, !isRefreshing else { return }
+
+    isRefreshRequested = true
+    refreshRequestTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+
+      while isBusy {
+        do {
+          try await Task.sleep(for: .milliseconds(10))
+        } catch {
+          finishRefreshRequest()
+          return
+        }
+      }
+
+      await performRefresh()
+      finishRefreshRequest()
+    }
+  }
+
   public func queueDraftApply() {
     guard let request = currentRequest else { return }
 
@@ -52,6 +79,15 @@ public final class VolumeStore {
   }
 
   public func refresh() async {
+    if let refreshRequestTask {
+      await refreshRequestTask.value
+      return
+    }
+
+    await performRefresh()
+  }
+
+  private func performRefresh() async {
     guard !isBusy else { return }
 
     trailingConfirmation?.cancel()
@@ -347,6 +383,11 @@ public final class VolumeStore {
   private func updateBusyState() {
     isBusy =
       isRefreshing || previewWorker != nil || activeConfirmations > 0
+  }
+
+  private func finishRefreshRequest() {
+    isRefreshRequested = false
+    refreshRequestTask = nil
   }
 
   private func publishFailure(_ message: String) {
