@@ -3,6 +3,7 @@
 use std::{
 	any::Any,
 	ffi::{CString, c_char},
+	mem::MaybeUninit,
 	panic::{self, AssertUnwindSafe},
 	ptr,
 };
@@ -43,14 +44,19 @@ pub struct DeskHelmSession {
 ///
 /// # Safety
 ///
-/// `out_result` must be null or point to writable memory for one
-/// [`DeskHelmVolumeResult`]. The caller must release returned strings with
-/// [`deskhelm_volume_result_free`].
+/// `out_result` must be null or point to aligned, dereferenceable storage for
+/// one [`DeskHelmVolumeResult`]. The storage may be uninitialized, but it must
+/// remain exclusively accessible for the full call: the caller must not read or
+/// write it, and it must not overlap any other argument. The caller must release returned strings
+/// with [`deskhelm_volume_result_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskhelm_read_volume(out_result: *mut DeskHelmVolumeResult) -> i32 {
 	if !prepare_output(out_result) {
 		return STATUS_INVALID_ARGUMENT;
 	}
+
+	// SAFETY: The output contract guarantees aligned, exclusive storage for the full call.
+	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
 
 	run_operation(out_result, crate::read_volume)
 }
@@ -59,9 +65,7 @@ pub unsafe extern "C" fn deskhelm_read_volume(out_result: *mut DeskHelmVolumeRes
 ///
 /// # Safety
 ///
-/// `out_result` must be null or point to writable memory for one
-/// [`DeskHelmVolumeResult`]. The caller must release returned strings with
-/// [`deskhelm_volume_result_free`].
+/// `out_result` follows the [`deskhelm_read_volume`] contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskhelm_set_volume(
 	level: i32,
@@ -70,6 +74,9 @@ pub unsafe extern "C" fn deskhelm_set_volume(
 	if !prepare_output(out_result) {
 		return STATUS_INVALID_ARGUMENT;
 	}
+
+	// SAFETY: The output contract guarantees aligned, exclusive storage for the full call.
+	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
 
 	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
@@ -88,11 +95,12 @@ pub unsafe extern "C" fn deskhelm_set_volume(
 ///
 /// # Safety
 ///
-/// `out_session` must be null or point to writable storage for one session
-/// pointer. `out_result` follows the [`deskhelm_read_volume`] contract. A
-/// successful session must be released with [`deskhelm_session_free`]. The
-/// caller must release any returned strings with
-/// [`deskhelm_volume_result_free`].
+/// `out_session` must be null or point to aligned, dereferenceable storage for
+/// one session pointer. When non-null, it must remain exclusively accessible
+/// for the full call and must not overlap `out_result`. `out_result` follows the
+/// [`deskhelm_read_volume`] contract. A successful session must be released
+/// with [`deskhelm_session_free`]. The caller must release any returned strings
+/// with [`deskhelm_volume_result_free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskhelm_session_create(
 	out_session: *mut *mut DeskHelmSession,
@@ -103,6 +111,9 @@ pub unsafe extern "C" fn deskhelm_session_create(
 	if !prepare_output(out_result) {
 		return STATUS_INVALID_ARGUMENT;
 	}
+
+	// SAFETY: Both output contracts guarantee aligned, exclusive, non-overlapping storage.
+	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
 
 	run_boundary(out_result, |result| {
 		if !session_output_ready {
@@ -143,6 +154,9 @@ pub unsafe extern "C" fn deskhelm_session_read(
 		return STATUS_INVALID_ARGUMENT;
 	}
 
+	// SAFETY: The output contract guarantees aligned storage disjoint from the live session.
+	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+
 	run_boundary(out_result, |result| {
 		if session.is_null() {
 			return invalid_argument(result, "DeskHelm received no display session.");
@@ -171,6 +185,9 @@ pub unsafe extern "C" fn deskhelm_session_set(
 	if !prepare_output(out_result) {
 		return STATUS_INVALID_ARGUMENT;
 	}
+
+	// SAFETY: The output contract guarantees aligned storage disjoint from the live session.
+	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
 
 	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
@@ -209,6 +226,9 @@ pub unsafe extern "C" fn deskhelm_session_write(
 	if !prepare_output(out_result) {
 		return STATUS_INVALID_ARGUMENT;
 	}
+
+	// SAFETY: The output contract guarantees aligned storage disjoint from the live session.
+	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
 
 	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
@@ -301,7 +321,7 @@ fn prepare_session_output(out_session: *mut *mut DeskHelmSession) -> bool {
 }
 
 fn run_operation(
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: &mut MaybeUninit<DeskHelmVolumeResult>,
 	operation: impl FnOnce() -> Result<VolumeReading>,
 ) -> i32 {
 	run_boundary(out_result, |result| complete_operation(result, operation))
@@ -340,7 +360,7 @@ fn invalid_argument(result: &mut DeskHelmVolumeResult, message: &str) -> i32 {
 }
 
 fn run_boundary(
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: &mut MaybeUninit<DeskHelmVolumeResult>,
 	operation: impl FnOnce(&mut DeskHelmVolumeResult) -> i32,
 ) -> i32 {
 	let mut result = DeskHelmVolumeResult::empty();
@@ -360,9 +380,7 @@ fn run_boundary(
 		},
 	};
 
-	// SAFETY: The exported function prepared and validated this output pointer. The internal
-	// callbacks receive only the private staging value and do not capture caller result storage.
-	unsafe { ptr::write(out_result, result) };
+	out_result.write(result);
 
 	status
 }
@@ -550,10 +568,12 @@ mod tests {
 
 	#[test]
 	fn success_result_converts_and_frees_owned_strings() {
-		let mut result = DeskHelmVolumeResult::empty();
-		let status = ffi::run_operation(&mut result, || {
+		let mut output = MaybeUninit::<DeskHelmVolumeResult>::uninit();
+		let status = ffi::run_operation(&mut output, || {
 			Ok(VolumeReading::new("LG\0UltraGear".to_owned(), 42, 100))
 		});
+		// SAFETY: The boundary initializes its output before returning.
+		let mut result = unsafe { output.assume_init() };
 
 		assert_eq!(status, STATUS_OK);
 		assert_eq!(result.current, 42);
@@ -575,14 +595,16 @@ mod tests {
 
 	#[test]
 	fn runtime_error_converts_to_an_owned_error_string() {
-		let mut result = DeskHelmVolumeResult::empty();
-		let status = ffi::run_operation(&mut result, || {
+		let mut output = MaybeUninit::<DeskHelmVolumeResult>::uninit();
+		let status = ffi::run_operation(&mut output, || {
 			let failed_read: color_eyre::Result<()> = Err(eyre::eyre!("DDC/CI unavailable"));
 
 			failed_read.wrap_err("Could not read volume")?;
 
 			Ok(VolumeReading::new(String::new(), 0, 0))
 		});
+		// SAFETY: The boundary initializes its output before returning.
+		let mut result = unsafe { output.assume_init() };
 
 		assert_eq!(status, STATUS_RUNTIME_ERROR);
 
@@ -598,8 +620,10 @@ mod tests {
 
 	#[test]
 	fn panics_do_not_cross_the_ffi_boundary() {
-		let mut result = DeskHelmVolumeResult::empty();
-		let status = ffi::run_operation(&mut result, || panic!("test panic"));
+		let mut output = MaybeUninit::<DeskHelmVolumeResult>::uninit();
+		let status = ffi::run_operation(&mut output, || panic!("test panic"));
+		// SAFETY: The boundary initializes its output after catching the panic.
+		let mut result = unsafe { output.assume_init() };
 
 		assert_eq!(status, STATUS_PANIC);
 
@@ -614,14 +638,16 @@ mod tests {
 
 	#[test]
 	fn panic_after_partial_result_resets_the_staged_output() {
-		let mut result = DeskHelmVolumeResult::empty();
-		let status = ffi::run_boundary(&mut result, |staged| {
+		let mut output = MaybeUninit::<DeskHelmVolumeResult>::uninit();
+		let status = ffi::run_boundary(&mut output, |staged| {
 			staged.current = 42;
 			staged.maximum = 100;
 			staged.display = ffi::owned_c_string("LG UltraGear");
 
 			panic!("panic after staging a result");
 		});
+		// SAFETY: The boundary initializes its output after catching the panic.
+		let mut result = unsafe { output.assume_init() };
 
 		assert_eq!(status, STATUS_PANIC);
 		assert_eq!(result.current, 0);
