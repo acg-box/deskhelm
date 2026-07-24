@@ -42,8 +42,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         volumeKeyState: volumeKeyState,
         onToggleVolumeKeys: {
           volumeKeyController.toggle()
+        },
+        onPanelWillPresent: {
+          volumeKeyController.dismissHUD()
         }
       )
+      volumeKeyController.setHUDPresentationCondition { [weak controller] in
+        controller?.isPanelPresented != true
+      }
       self.volumeKeyController = volumeKeyController
       statusItemController = controller
       publishReadyState(for: controller)

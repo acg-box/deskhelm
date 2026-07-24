@@ -130,20 +130,20 @@ Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DeskHelmMacMain.swift`, `a
 
 ## SwiftUI Volume Panel
 
-`VolumePanel` supplies a 360-point-wide content stack plus outer padding; its intrinsic height can grow when error status appears, and the AppKit shell follows that preferred size. The shell contributes no popover chrome, shadow, or second background. On macOS 26 or later the entire content uses one public `.clear.interactive()` Liquid Glass effect shaped as a continuous rounded rectangle; macOS 14 through 25 render the same single-surface structure with `.regularMaterial`. The header identifies the supported hardware surface as `LG 39GX950B` over `USB-C - DDC/CI`, while help text exposes the display label returned by the core.
+`VolumePanel` supplies a 360-point-wide content stack plus outer padding; its intrinsic height can grow when error status appears, and the AppKit shell follows that preferred size. The shell contributes no popover chrome, shadow, or second background. On macOS 26 or later the entire content uses one public `.clear.interactive()` Liquid Glass effect shaped as a continuous rounded rectangle; macOS 14 through 25 render the same single-surface structure with `.regularMaterial`. The header identifies the supported hardware surface as `LG 39GX950B` over `USB-C · DDC/CI`, while help text exposes the display label returned by the core.
 
 `VolumeStore` separates `draftLevel` from `confirmedLevel`:
 
-1. The slider remains disabled until a successful refresh establishes a confirmed reading.
-2. Slider movement updates the local `Double` draft immediately and clamps it without rounding.
+1. The volume control remains disabled until a successful refresh establishes a confirmed reading.
+2. Pointer, arrow-key, VoiceOver, or media-key adjustment updates the local `Double` draft immediately and clamps it without rounding.
 3. A 24 ms initial coalescing window starts one background preview write. At most one preview is in flight, and further movement replaces one pending target.
-4. The store schedules a readback 150 ms after the latest input. Releasing the slider cancels that delay and confirms immediately.
+4. The store schedules a readback 150 ms after the latest input. Ending a pointer drag cancels that delay and confirms immediately.
 5. Preview results do not update `confirmedLevel`. A matching readback publishes confirmation; a mismatch triggers an exact set and readback.
 6. A failed preview or confirmation starts one fresh read. The actual reading replaces draft and confirmed state. A failed refresh or recovery read disables adjustment and leaves the error visible.
 
-The panel also exposes refresh, volume-key enablement, and quit controls, busy state, and accessibility identifiers. It shows a progress indicator only while the first display read is unresolved. Preview writes and trailing confirmation keep the current controls stable instead of inserting and removing a spinner for every adjustment. It is DeskHelm's own control surface; it does not modify the disabled macOS Control Center slider or register a Core Audio output device. Those integrations would require a separate Core Audio HAL plug-in.
+The panel also exposes refresh, volume-key enablement, and quit controls, busy state, and accessibility identifiers. It shows a progress indicator only while the first display read is unresolved. Selecting refresh during preview or confirmation retains one request, disables the refresh button immediately, waits for store work to become idle, and then performs the read; further selections are ignored while that request or read is active. A direct refresh caller joins the retained task instead of starting a second hardware read. Preview writes and trailing confirmation leave the current controls stable instead of inserting and removing a spinner for every adjustment. The custom control supports pointer dragging, focusable arrow-key adjustment, and the VoiceOver adjustable action. Its track fill, thumb, rolling number, and accessibility value derive from one clamped `VolumeLevelPresentation`, so they remain synchronized while an animated draft is between integer targets. This [panel presentation shares its scalar and animation policy with the keyboard HUD](#optional-keyboard-volume-control). It is DeskHelm's own control surface; it does not modify the disabled macOS Control Center slider or register a Core Audio output device. Those integrations would require a separate Core Audio HAL plug-in.
 
-Swift tests inject a `VolumeControlling` actor stub. They cover smooth draft retention and range clamping, unresolved-initial-read loading feedback, unsupported maximum validation, successful and failed refresh, latest-target preview coalescing, automatic and release-time confirmation, return-to-confirmed behavior, refresh and stale-result races, recovery after preview or confirmation failure, and the pure level-animation policy. The suite does not currently exercise the AppKit status icon, dismissal boundary, screen positioning, dynamic panel resizing, or physical session reuse.
+Swift tests inject a `VolumeControlling` actor stub. They cover smooth draft retention and range clamping, unresolved-initial-read loading feedback, refresh-state separation, one requested refresh waiting for an active preview, a direct caller joining that request, unsupported maximum validation, successful and failed refresh, latest-target preview coalescing, automatic and release-time confirmation, return-to-confirmed behavior, refresh and stale-result races, recovery after preview or confirmation failure, the pure level-animation policy, and presentation-scalar clamping. They do not separately prove refresh queuing during confirmation or duplicate button-request coalescing. The suite also does not exercise the custom control's pointer geometry, arrow-key or VoiceOver handling, rolling-number rendering, AppKit status icon, dismissal boundary, screen positioning, dynamic panel resizing, visual interpolation, or physical session reuse.
 
 Sources: `apps/deskhelm/macos/Sources/DeskHelmAppCore/`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeStoreTests.swift`.
 
@@ -163,7 +163,7 @@ sequenceDiagram
     participant Audio as Core Audio Route
     participant Store as Volume Store
     participant Core as Rust Display Core
-    participant HUD as Passive Volume HUD
+    participant HUD as Transient Volume HUD
 
     User->>Panel: Enable Volume Keys
     Panel->>VKC: toggle
@@ -178,8 +178,12 @@ sequenceDiagram
     Audio-->>Tap: unique target, other route, ambiguous, or unknown
     alt unique target LG DisplayPort route
         Tap->>VKC: consume permitted pressed action
-        VKC->>HUD: show projected level
         VKC->>Store: queue latest preview target
+        alt menu panel is not presented
+            VKC->>HUD: show projected level
+        else menu panel is presented
+            Store-->>Panel: animate projected draft
+        end
         Store->>Core: write preview target
         Core-->>Store: transport accepted or error
         Store->>Core: read after input stops
@@ -188,26 +192,30 @@ sequenceDiagram
             Store-->>VKC: confirmed level
         else permission, tap, or display failure
             VKC->>Tap: stop interception
-            VKC->>HUD: show error
+            opt menu panel is not presented
+                VKC->>HUD: show error
+            end
         end
     else other, ambiguous, or unreadable output route
         Tap-->>User: pass event through to macOS
     end
 ```
 
+The diagram shows event-time route gating and the mutually exclusive menu-panel or HUD presentation paths.
+
 The opt-in path confirms hardware before installing interception, gates each decoded event on the current Core Audio output route, applies each permitted key action to the current draft, coalesces preview writes, confirms once after input stops, and fails open either by passing a non-target event through or removing the filter when it cannot safely continue.
 
-Each press or macOS system repeat changes the draft level by one point and clamps it to the display range. Holding a key therefore adjusts continuously without an app-owned repeat timer. The shared store sends the newest preview target and owns the trailing confirmation; `VolumeKeyController` does not wait for a full readback after each event. `VolumeHUDController` shows the projected value in a borderless, nonactivating, mouse-ignoring status-bar-level panel for 1.25 seconds; errors remain for two seconds.
+Each press or macOS system repeat changes the draft level by one point and clamps it to the display range. Holding a key therefore adjusts continuously without an app-owned repeat timer. The shared store sends the newest preview target and owns the trailing confirmation; `VolumeKeyController` does not wait for a full readback after each event. When the menu panel is not presented, `VolumeHUDController` shows the projected value in a borderless, nonactivating, mouse-ignoring status-bar-level panel for 1.25 seconds; errors remain for two seconds. Beginning menu-panel presentation dismisses an existing HUD. While the menu is visible or awaiting presentation, level updates animate its shared control and level or error HUD requests are suppressed, avoiding a second key window.
 
-`VolumeHUDController` retains one observable `VolumeHUDState` and one nonopaque SwiftUI hosting view instead of replacing its content view for every repeat. The HUD, open menu-panel slider, and numbers read the same projected level. The menu panel and HUD apply matching animation transactions derived from the same event timestamp. Repeated input uses a short linear duration equal to 60 percent of the preceding update interval, capped at 50 ms. It normally completes before the next event when cadence stays stable, instead of accumulating the fixed-duration lag. An isolated visible update uses 80 ms. First HUD presentation, sub-frame updates, level/error switches, and Reduce Motion updates are immediate.
+`VolumeHUDController` retains one observable `VolumeHUDState` and one nonopaque SwiftUI hosting view instead of replacing its content view for every repeat. The HUD and the [open menu-panel control](#swiftui-volume-panel) animate from the same projected draft and apply matching transactions derived from the same event timestamp. Each view is `Animatable` over one `Double` level and derives its fill, thumb or speaker symbol, rounded number, and accessibility value from `VolumeLevelPresentation`. For repeated input more than 18 ms and at most 120 ms apart, a continuous linear segment lasts the full preceding event interval, eliminating dead time between one-point targets. Slower isolated visible updates use 80 ms. First HUD presentation, sub-frame updates, level/error switches, and Reduce Motion updates are immediate; the menu can animate its first visible keyboard update.
 
-On macOS 26 or later, one public AppKit `NSGlassEffectView` uses the clear style and owns the SwiftUI hosting view through its `contentView`. This keeps both the material and semantic content inside the same native glass surface. macOS 14 through 25 use one active `NSVisualEffectView` with the HUD-window material. The outer panel remains transparent, borderless, nonactivating, mouse-ignoring, and non-key, so it adds no opaque window background and does not borrow keyboard focus from the current application. Apple does not document cross-window Liquid Glass sampling for a standalone overlay panel, so this public surface can still render differently from a system-owned OSD. A new level also resets the dismissal timer without another layout pass, forced display, or synchronous preferences flush.
+On macOS 26 or later, the SwiftUI HUD content applies one public `.clear.interactive()` glass effect shaped as a capsule; macOS 14 through 25 use one regular-material capsule. The [AppKit shell](#native-appkit-shell) provides a transparent, borderless, nonactivating, mouse-ignoring panel with no second effect wrapper. It temporarily makes that panel key while visible so the clear-glass surface renders as active, but never makes it main or accepts pointer input. The resulting appearance and focus behavior remain live UI compatibility risks and can still differ from Apple's private OSD. A new level resets the 1.25-second dismissal timer without another layout pass; dismissal fades over 160 ms unless Reduce Motion is enabled, then orders the panel out.
 
-If the event tap is disabled, confirmed state is lost, or display communication fails, the controller removes the tap, clears the persisted request, marks the feature failed, and shows the error HUD. Later media-key events then return to macOS. Decoder tests cover accepted press/system-repeat/release payloads, rejection of mute or unrelated events, and one-point clamping. Route-policy tests cover the two accepted LG names, accepted manufacturer identities, normalization, non-display transport, other LG displays, unrelated manufacturers, unknown output state, unique-current-endpoint selection, non-target press/release pass-through, and target press/release disposition. They do not validate Core Audio property lookup, live output switching, the undocumented payload against physical keyboards, Accessibility prompting, event-tap suppression, or HUD presentation end to end.
+If the event tap is disabled, confirmed state is lost, or display communication fails, the controller removes the tap, clears the persisted request, marks the feature failed, and shows the error HUD only when the menu panel is not presented. Later media-key events then return to macOS. Decoder tests cover accepted press/system-repeat/release payloads, rejection of mute or unrelated events, and one-point clamping. Route-policy tests cover the two accepted LG names, accepted manufacturer identities, normalization, non-display transport, other LG displays, unrelated manufacturers, unknown output state, unique-current-endpoint selection, non-target press/release pass-through, and target press/release disposition. They do not validate Core Audio property lookup, live output switching, the undocumented payload against physical keyboards, Accessibility prompting, event-tap suppression, or HUD presentation end to end.
 
 This feature reuses the display safety boundary below and is built through [Operations](operations.md#native-app-build-and-run).
 
-Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DefaultAudioOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/MediaKeyMonitor.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeKeyController.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeHUDController.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelAnimation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeKeyOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeMediaKey.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Stores/VolumeKeyFeatureState.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumeHUD.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelAnimationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeHUDStateTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeKeyOutputRouteTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeMediaKeyTests.swift`.
+Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DefaultAudioOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/MediaKeyMonitor.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeKeyController.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeHUDController.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelAnimation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelPresentation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeKeyOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeMediaKey.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Stores/VolumeKeyFeatureState.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumeHUD.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumePanel.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelAnimationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelPresentationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeHUDStateTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeKeyOutputRouteTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeMediaKeyTests.swift`.
 
 ## Display Selection And Safety
 

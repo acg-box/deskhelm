@@ -6,7 +6,7 @@ import SwiftUI
 final class VolumeHUDController {
   private let panel: VolumeHUDPanel
   private let state: VolumeHUDState
-  private let surfaceView: VolumeHUDSurfaceView
+  private let hostingView: NonOpaqueHostingView
   private var dismissalTask: Task<Void, Never>?
   private var presentationGeneration = 0
   private var lastLevelUpdateUptime: TimeInterval?
@@ -15,7 +15,12 @@ final class VolumeHUDController {
     let state = VolumeHUDState()
 
     self.state = state
-    surfaceView = VolumeHUDSurfaceView(state: state)
+    hostingView = NonOpaqueHostingView(
+      rootView: AnyView(
+        VolumeHUD(state: state)
+          .environment(\.appearsActive, true)
+      )
+    )
     panel = VolumeHUDPanel(
       contentRect: .zero,
       styleMask: [.borderless, .nonactivatingPanel],
@@ -69,12 +74,13 @@ final class VolumeHUDController {
   }
 
   private func configurePanel() {
-    panel.contentView = surfaceView
+    panel.contentView = hostingView
     panel.isOpaque = false
     panel.backgroundColor = .clear
     panel.hasShadow = false
     panel.isReleasedWhenClosed = false
     panel.isFloatingPanel = true
+    panel.becomesKeyOnlyIfNeeded = false
     panel.hidesOnDeactivate = false
     panel.ignoresMouseEvents = true
     panel.level = .popUpMenu
@@ -98,16 +104,21 @@ final class VolumeHUDController {
     let wasVisible = panel.isVisible
 
     if !wasVisible || requiresLayout {
-      surfaceView.layoutSubtreeIfNeeded()
-      let size = surfaceView.contentFittingSize
+      hostingView.layoutSubtreeIfNeeded()
+      let size = hostingView.fittingSize
 
       panel.setContentSize(size)
       positionPanel()
     }
-    panel.alphaValue = 1
     if !wasVisible {
       panel.orderFrontRegardless()
-      panel.displayIfNeeded()
+    }
+    if !panel.isKeyWindow {
+      panel.makeKey()
+    }
+    panel.alphaValue = 1
+    panel.displayIfNeeded()
+    if !wasVisible {
       publishState(phase: phase)
     }
 
@@ -189,7 +200,9 @@ final class VolumeHUDController {
       + "nonactivating=\(panel.styleMask.contains(.nonactivatingPanel)) "
       + "canBecomeKey=\(panel.canBecomeKey) "
       + "ignoresMouse=\(panel.ignoresMouseEvents) "
-      + "surface=\(surfaceView.diagnosticSurface) "
+      + "surface=swiftui-clear-glass-single-tree "
+      + "windowNumber=\(panel.windowNumber) "
+      + "x=\(Int(panel.frame.minX.rounded())) y=\(Int(panel.frame.minY.rounded())) "
       + "width=\(Int(panel.frame.width.rounded())) height=\(Int(panel.frame.height.rounded()))"
     let defaults = UserDefaults.standard
 
@@ -203,103 +216,8 @@ final class VolumeHUDController {
 
 @MainActor
 private final class VolumeHUDPanel: NSPanel {
-  override var canBecomeKey: Bool { false }
+  override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
-}
-
-@MainActor
-private final class VolumeHUDSurfaceView: NSView {
-  private let contentHostingView: NonOpaqueHostingView
-  private let effectView: NSView
-  let diagnosticSurface: String
-
-  init(state: VolumeHUDState) {
-    let contentHostingView = NonOpaqueHostingView(
-      rootView: AnyView(
-        VolumeHUD(state: state)
-          .environment(\.appearsActive, true)
-      )
-    )
-    self.contentHostingView = contentHostingView
-
-    if #available(macOS 26.0, *) {
-      let glassEffectView = NSGlassEffectView()
-      glassEffectView.style = .clear
-      glassEffectView.contentView = contentHostingView
-      effectView = glassEffectView
-      diagnosticSurface = "appkit-clear-glass-content-view"
-    } else {
-      let visualEffectView = NSVisualEffectView()
-      visualEffectView.material = .hudWindow
-      visualEffectView.blendingMode = .behindWindow
-      visualEffectView.state = .active
-      visualEffectView.addSubview(contentHostingView)
-      effectView = visualEffectView
-      diagnosticSurface = "visual-effect-hud-window"
-    }
-
-    super.init(frame: .zero)
-
-    wantsLayer = true
-    layer?.backgroundColor = NSColor.clear.cgColor
-    layer?.isOpaque = false
-
-    configure(hostingView: contentHostingView)
-    effectView.wantsLayer = true
-    effectView.layer?.backgroundColor = NSColor.clear.cgColor
-    effectView.layer?.isOpaque = false
-    addSubview(effectView)
-  }
-
-  @available(*, unavailable)
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
-  }
-
-  override var isOpaque: Bool { false }
-
-  override func hitTest(_ point: NSPoint) -> NSView? {
-    nil
-  }
-
-  override func layout() {
-    super.layout()
-
-    let effectFrame = bounds.insetBy(dx: 8, dy: 8)
-    if effectView.frame != effectFrame {
-      effectView.frame = effectFrame
-    }
-    if contentHostingView.frame != effectView.bounds {
-      contentHostingView.frame = effectView.bounds
-    }
-
-    let cornerRadius = effectView.bounds.height / 2
-    if #available(macOS 26.0, *),
-      let glassEffectView = effectView as? NSGlassEffectView
-    {
-      glassEffectView.cornerRadius = cornerRadius
-    } else {
-      effectView.layer?.cornerRadius = cornerRadius
-      effectView.layer?.masksToBounds = true
-    }
-  }
-
-  var contentFittingSize: NSSize {
-    contentHostingView.layoutSubtreeIfNeeded()
-    let fittingSize = contentHostingView.fittingSize
-    return NSSize(
-      width: fittingSize.width + 16,
-      height: fittingSize.height + 16
-    )
-  }
-
-  private func configure(hostingView: NSView) {
-    hostingView.frame = bounds
-    hostingView.autoresizingMask = [.width, .height]
-    hostingView.wantsLayer = true
-    hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-    hostingView.layer?.isOpaque = false
-  }
 }
 
 @MainActor
@@ -314,4 +232,8 @@ private final class NonOpaqueHostingView: NSHostingView<AnyView> {
   }
 
   override var isOpaque: Bool { false }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    nil
+  }
 }
