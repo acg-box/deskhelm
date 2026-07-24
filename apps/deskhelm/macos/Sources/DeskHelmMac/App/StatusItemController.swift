@@ -13,8 +13,13 @@ final class StatusItemController: NSObject, NSWindowDelegate {
   private let panel: GlassPanel
   private let hostingController: PanelHostingController<VolumePanel>
   private let store: VolumeStore
+  private let onPanelWillPresent: () -> Void
   private var presentationTask: Task<Void, Never>?
   private var dismissesOnResignKey = false
+
+  var isPanelPresented: Bool {
+    panel.isVisible || presentationTask != nil
+  }
 
   var diagnosticSummary: String {
     let button = statusItem.button
@@ -27,9 +32,11 @@ final class StatusItemController: NSObject, NSWindowDelegate {
   init(
     store: VolumeStore,
     volumeKeyState: VolumeKeyFeatureState,
-    onToggleVolumeKeys: @escaping () -> Void
+    onToggleVolumeKeys: @escaping () -> Void,
+    onPanelWillPresent: @escaping () -> Void
   ) throws {
     self.store = store
+    self.onPanelWillPresent = onPanelWillPresent
     self.statusItem = NSStatusBar.system.statusItem(
       withLength: NSStatusItem.squareLength
     )
@@ -169,6 +176,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
   }
 
   private func presentPanel(relativeTo sender: NSStatusBarButton) {
+    onPanelWillPresent()
     resizePanel(to: preferredPanelSize())
     positionPanel(relativeTo: sender)
     presentationTask = Task { @MainActor [weak self, weak sender] in

@@ -21,12 +21,14 @@ struct VolumeStoreTests {
     await waitForReadCount(1, controller: controller)
 
     #expect(store.isBusy)
+    #expect(store.isRefreshInProgress)
     #expect(store.showsInitialLoadingIndicator)
 
     await readGate.open()
     await refresh.value
 
     #expect(!store.isBusy)
+    #expect(!store.isRefreshInProgress)
     #expect(!store.showsInitialLoadingIndicator)
   }
 
@@ -155,6 +157,7 @@ struct VolumeStoreTests {
     #expect(store.confirmedLevel == 24)
     #expect(store.draftLevel == 35)
     #expect(store.isBusy)
+    #expect(!store.isRefreshInProgress)
     #expect(!store.showsInitialLoadingIndicator)
 
     await waitForPreviewCount(2, controller: controller)
@@ -219,6 +222,72 @@ struct VolumeStoreTests {
     #expect(await controller.confirmedLevels().isEmpty)
     #expect(store.confirmedLevel == 30)
     #expect(store.draftLevel == 30)
+    #expect(store.errorMessage == nil)
+  }
+
+  @Test("A requested refresh waits for an active preview")
+  @MainActor
+  func requestedRefreshWaitsForPreview() async {
+    let controller = StubVolumeController(
+      readResponses: [
+        .success(Self.reading(level: 24)),
+        .success(Self.reading(level: 25)),
+      ],
+      writeResponses: [.success(())],
+      writeDelay: .milliseconds(50)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+    #expect(store.isBusy)
+
+    store.requestRefresh()
+    #expect(store.isRefreshInProgress)
+    #expect(await controller.readCount() == 1)
+
+    await waitForReadCount(2, controller: controller)
+    await waitUntilRefreshCompletes(store)
+
+    #expect(
+      await controller.operations()
+        == [.read, .write(25), .read]
+    )
+    #expect(store.confirmedLevel == 25)
+    #expect(store.draftLevel == 25)
+    #expect(!store.isRefreshInProgress)
+    #expect(store.errorMessage == nil)
+  }
+
+  @Test("A direct refresh joins an already requested refresh")
+  @MainActor
+  func directRefreshJoinsRequestedRefresh() async {
+    let controller = StubVolumeController(
+      readResponses: [
+        .success(Self.reading(level: 24)),
+        .success(Self.reading(level: 25)),
+      ],
+      writeResponses: [.success(())],
+      writeDelay: .milliseconds(50)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+
+    store.requestRefresh()
+    await store.refresh()
+    await waitUntilRefreshCompletes(store)
+
+    #expect(
+      await controller.operations()
+        == [.read, .write(25), .read]
+    )
+    #expect(store.confirmedLevel == 25)
     #expect(store.errorMessage == nil)
   }
 
@@ -487,6 +556,19 @@ struct VolumeStoreTests {
     }
 
     Issue.record("Timed out waiting for the volume store to become idle.")
+  }
+
+  @MainActor
+  private func waitUntilRefreshCompletes(_ store: VolumeStore) async {
+    for _ in 0..<500 {
+      if !store.isRefreshInProgress, !store.isBusy {
+        return
+      }
+
+      try? await Task.sleep(for: .milliseconds(1))
+    }
+
+    Issue.record("Timed out waiting for the requested refresh to complete.")
   }
 }
 
