@@ -28,4 +28,38 @@ package struct VolumeLevelPresentation: Equatable, Sendable {
   package var transitionProgress: Double {
     level - Double(lowerLevel)
   }
+
+  package var rollingDigits: [VolumeLevelRollingDigitPresentation] {
+    let digitCount = String(Int(maximum.rounded(.down))).count
+    let lowerDigits = digits(for: lowerLevel, count: digitCount)
+    let upperDigits = digits(for: upperLevel, count: digitCount)
+
+    return zip(lowerDigits, upperDigits).map {
+      VolumeLevelRollingDigitPresentation(
+        lowerDigit: $0,
+        upperDigit: $1
+      )
+    }
+  }
+
+  private func digits(
+    for value: Int,
+    count: Int
+  ) -> [Int?] {
+    let valueDigits = String(value).compactMap(\.wholeNumberValue)
+    let padding = [Int?](
+      repeating: nil,
+      count: max(count - valueDigits.count, 0)
+    )
+    return padding + valueDigits.map(Optional.some)
+  }
+}
+
+package struct VolumeLevelRollingDigitPresentation: Equatable, Sendable {
+  package let lowerDigit: Int?
+  package let upperDigit: Int?
+
+  package var isAnimated: Bool {
+    lowerDigit != upperDigit
+  }
 }

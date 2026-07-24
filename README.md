@@ -80,16 +80,19 @@ private system volume OSD. On macOS 26 or later, its SwiftUI content uses one
 public `.clear.interactive()` Liquid Glass surface. The nonactivating panel
 temporarily becomes the key window while the HUD is visible. This keeps the
 clear, refractive glass appearance instead of the opaque inactive-window
-appearance. The panel orders out after 1.25 seconds without new input.
+appearance. The HUD does not leave its content view as first responder or show a
+keyboard focus ring. The panel orders out after 1.25 seconds without new input.
 Opening the menu panel dismisses a visible HUD. While the menu panel is open,
 volume keys animate its control directly and do not open a second key window.
 
 The menu control derives its track, thumb, and number from one animated level.
 The HUD derives its progress, speaker symbol, and number from one animated
-level. During a held key, each linear segment uses the preceding repeat interval
-as its duration. This removes the dead time between one-point targets and keeps
-the visual value separate from the immediate DDC/CI target. Reduce Motion makes
-the update immediate.
+level. Number columns roll independently: a normal step changes only the ones
+place, while a carry or borrow also changes the affected higher place. During a
+held key, each linear segment uses the preceding repeat interval as its duration.
+This removes the dead time between one-point targets and keeps the visual value
+separate from the immediate DDC/CI target. Reduce Motion makes the update
+immediate.
 
 For Bluetooth headphones, Mac speakers, and all other outputs, DeskHelm returns
 the event unchanged so macOS can adjust that device normally. A Core Audio query
