@@ -50,13 +50,12 @@ pub struct DeskHelmSession {
 /// write it, and it must not overlap any other argument. The caller must release returned strings
 /// with [`deskhelm_volume_result_free`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn deskhelm_read_volume(out_result: *mut DeskHelmVolumeResult) -> i32 {
-	if !prepare_output(out_result) {
+pub unsafe extern "C" fn deskhelm_read_volume(
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
+) -> i32 {
+	let Some(out_result) = prepare_output(out_result) else {
 		return STATUS_INVALID_ARGUMENT;
-	}
-
-	// SAFETY: The output contract guarantees aligned, exclusive storage for the full call.
-	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+	};
 
 	run_operation(out_result, crate::read_volume)
 }
@@ -69,14 +68,11 @@ pub unsafe extern "C" fn deskhelm_read_volume(out_result: *mut DeskHelmVolumeRes
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskhelm_set_volume(
 	level: i32,
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
 ) -> i32 {
-	if !prepare_output(out_result) {
+	let Some(out_result) = prepare_output(out_result) else {
 		return STATUS_INVALID_ARGUMENT;
-	}
-
-	// SAFETY: The output contract guarantees aligned, exclusive storage for the full call.
-	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+	};
 
 	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
@@ -104,16 +100,12 @@ pub unsafe extern "C" fn deskhelm_set_volume(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskhelm_session_create(
 	out_session: *mut *mut DeskHelmSession,
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
 ) -> i32 {
 	let session_output_ready = prepare_session_output(out_session);
-
-	if !prepare_output(out_result) {
+	let Some(out_result) = prepare_output(out_result) else {
 		return STATUS_INVALID_ARGUMENT;
-	}
-
-	// SAFETY: Both output contracts guarantee aligned, exclusive, non-overlapping storage.
-	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+	};
 
 	run_boundary(out_result, |result| {
 		if !session_output_ready {
@@ -148,14 +140,11 @@ pub unsafe extern "C" fn deskhelm_session_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn deskhelm_session_read(
 	session: *mut DeskHelmSession,
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
 ) -> i32 {
-	if !prepare_output(out_result) {
+	let Some(out_result) = prepare_output(out_result) else {
 		return STATUS_INVALID_ARGUMENT;
-	}
-
-	// SAFETY: The output contract guarantees aligned storage disjoint from the live session.
-	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+	};
 
 	run_boundary(out_result, |result| {
 		if session.is_null() {
@@ -180,14 +169,11 @@ pub unsafe extern "C" fn deskhelm_session_read(
 pub unsafe extern "C" fn deskhelm_session_set(
 	session: *mut DeskHelmSession,
 	level: i32,
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
 ) -> i32 {
-	if !prepare_output(out_result) {
+	let Some(out_result) = prepare_output(out_result) else {
 		return STATUS_INVALID_ARGUMENT;
-	}
-
-	// SAFETY: The output contract guarantees aligned storage disjoint from the live session.
-	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+	};
 
 	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
@@ -221,14 +207,11 @@ pub unsafe extern "C" fn deskhelm_session_set(
 pub unsafe extern "C" fn deskhelm_session_write(
 	session: *mut DeskHelmSession,
 	level: i32,
-	out_result: *mut DeskHelmVolumeResult,
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
 ) -> i32 {
-	if !prepare_output(out_result) {
+	let Some(out_result) = prepare_output(out_result) else {
 		return STATUS_INVALID_ARGUMENT;
-	}
-
-	// SAFETY: The output contract guarantees aligned storage disjoint from the live session.
-	let out_result = unsafe { &mut *out_result.cast::<MaybeUninit<DeskHelmVolumeResult>>() };
+	};
 
 	run_boundary(out_result, |result| {
 		if !(0..=100).contains(&level) {
@@ -298,15 +281,14 @@ unsafe fn free_owned_strings(result: &mut DeskHelmVolumeResult) {
 	}
 }
 
-fn prepare_output(out_result: *mut DeskHelmVolumeResult) -> bool {
-	if out_result.is_null() {
-		return false;
-	}
+fn prepare_output(
+	out_result: Option<&mut MaybeUninit<DeskHelmVolumeResult>>,
+) -> Option<&mut MaybeUninit<DeskHelmVolumeResult>> {
+	let out_result = out_result?;
 
-	// SAFETY: The caller promises writable memory for one result.
-	unsafe { ptr::write(out_result, DeskHelmVolumeResult::empty()) };
+	out_result.write(DeskHelmVolumeResult::empty());
 
-	true
+	Some(out_result)
 }
 
 fn prepare_session_output(out_session: *mut *mut DeskHelmSession) -> bool {
@@ -427,7 +409,7 @@ mod tests {
 	#[test]
 	fn null_output_is_rejected() {
 		// SAFETY: A null output is explicitly permitted and rejected by the ABI.
-		let status = unsafe { ffi::deskhelm_read_volume(ptr::null_mut()) };
+		let status = unsafe { ffi::deskhelm_read_volume(None) };
 
 		assert_eq!(status, STATUS_INVALID_ARGUMENT);
 	}
@@ -437,7 +419,7 @@ mod tests {
 		let mut result = MaybeUninit::<DeskHelmVolumeResult>::uninit();
 		// SAFETY: The null session output is rejected before device access, and `result` is
 		// writable.
-		let status = unsafe { ffi::deskhelm_session_create(ptr::null_mut(), result.as_mut_ptr()) };
+		let status = unsafe { ffi::deskhelm_session_create(ptr::null_mut(), Some(&mut result)) };
 		// SAFETY: DeskHelm initializes a non-null result before returning.
 		let mut result = unsafe { result.assume_init() };
 
@@ -456,7 +438,7 @@ mod tests {
 	fn session_create_clears_output_when_result_storage_is_null() {
 		let mut session = MaybeUninit::uninit();
 		// SAFETY: `session` is writable, and a null result is explicitly rejected.
-		let status = unsafe { ffi::deskhelm_session_create(session.as_mut_ptr(), ptr::null_mut()) };
+		let status = unsafe { ffi::deskhelm_session_create(session.as_mut_ptr(), None) };
 		// SAFETY: DeskHelm initializes a non-null session output before returning.
 		let session = unsafe { session.assume_init() };
 
@@ -469,7 +451,7 @@ mod tests {
 		let mut read_result = MaybeUninit::<DeskHelmVolumeResult>::uninit();
 		// SAFETY: A null session is rejected, and `read_result` is writable.
 		let read_status =
-			unsafe { ffi::deskhelm_session_read(ptr::null_mut(), read_result.as_mut_ptr()) };
+			unsafe { ffi::deskhelm_session_read(ptr::null_mut(), Some(&mut read_result)) };
 		// SAFETY: DeskHelm initializes a non-null result before returning.
 		let mut read_result = unsafe { read_result.assume_init() };
 
@@ -481,7 +463,7 @@ mod tests {
 		let mut set_result = MaybeUninit::<DeskHelmVolumeResult>::uninit();
 		// SAFETY: A null session is rejected, the level is valid, and `set_result` is writable.
 		let set_status =
-			unsafe { ffi::deskhelm_session_set(ptr::null_mut(), 42, set_result.as_mut_ptr()) };
+			unsafe { ffi::deskhelm_session_set(ptr::null_mut(), 42, Some(&mut set_result)) };
 		// SAFETY: DeskHelm initializes a non-null result before returning.
 		let mut set_result = unsafe { set_result.assume_init() };
 
@@ -493,7 +475,7 @@ mod tests {
 		let mut write_result = MaybeUninit::<DeskHelmVolumeResult>::uninit();
 		// SAFETY: A null session is rejected, the level is valid, and `write_result` is writable.
 		let write_status =
-			unsafe { ffi::deskhelm_session_write(ptr::null_mut(), 42, write_result.as_mut_ptr()) };
+			unsafe { ffi::deskhelm_session_write(ptr::null_mut(), 42, Some(&mut write_result)) };
 		// SAFETY: DeskHelm initializes a non-null result before returning.
 		let mut write_result = unsafe { write_result.assume_init() };
 
@@ -519,7 +501,7 @@ mod tests {
 		for level in [-1, 101] {
 			let mut result = MaybeUninit::<DeskHelmVolumeResult>::uninit();
 			// SAFETY: `result` provides writable memory for the output.
-			let status = unsafe { ffi::deskhelm_set_volume(level, result.as_mut_ptr()) };
+			let status = unsafe { ffi::deskhelm_set_volume(level, Some(&mut result)) };
 			// SAFETY: DeskHelm initializes the output before returning for a non-null pointer.
 			let mut result = unsafe { result.assume_init() };
 
@@ -539,7 +521,7 @@ mod tests {
 			// SAFETY: The invalid level is rejected before the null session can be accessed, and
 			// `result` is writable.
 			let status =
-				unsafe { ffi::deskhelm_session_write(ptr::null_mut(), level, result.as_mut_ptr()) };
+				unsafe { ffi::deskhelm_session_write(ptr::null_mut(), level, Some(&mut result)) };
 			// SAFETY: DeskHelm initializes a non-null result before returning.
 			let mut result = unsafe { result.assume_init() };
 
@@ -561,7 +543,7 @@ mod tests {
 	#[test]
 	fn session_write_rejects_null_output_without_session_access() {
 		// SAFETY: A null output is explicitly permitted and rejected before session access.
-		let status = unsafe { ffi::deskhelm_session_write(ptr::null_mut(), 42, ptr::null_mut()) };
+		let status = unsafe { ffi::deskhelm_session_write(ptr::null_mut(), 42, None) };
 
 		assert_eq!(status, STATUS_INVALID_ARGUMENT);
 	}
