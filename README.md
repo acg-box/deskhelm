@@ -77,23 +77,45 @@ cargo build --locked -p deskhelm
 
 #### Optional Volume Keys
 
-Open the panel's ellipsis menu and select **Enable Volume Keys…**. DeskHelm asks
-for macOS Accessibility permission and intercepts volume-up and volume-down only
-when the default audio output uniquely matches the supported LG display. Set
+Open **Settings > Volume Keys**. You can request Accessibility access, open the
+correct macOS settings page, or drag the DeskHelm app chip into the
+Accessibility application list. Then enable **Keyboard Volume Control**.
+
+DeskHelm intercepts volume-up and volume-down only when the current output
+uniquely matches the supported LG display. macOS classifies this USB-C audio
+route as a DisplayPort transport. Other outputs, including Bluetooth
+headphones and Mac speakers, keep normal system volume-key behavior. Set
 `DESKHELM_CODE_SIGN_IDENTITY` to an authorized Apple Development identity when
 Accessibility authorization must persist across rebuilds.
 
+Open **Settings > General** to enable launch at login. The About pane shows the
+current update configuration. A source build without a signed Sparkle appcast
+opens GitHub Releases instead of claiming that an in-app update is available.
+
 ### Interaction
 
-Select the DeskHelm menu-bar icon to open the volume panel. Drag the control, use
-the arrow keys, or use the VoiceOver adjustable action. DeskHelm coalesces rapid
-preview writes and confirms the final target through hardware readback.
+Select the image-only DeskHelm menu-bar icon to open its native menu. Select
+**Settings…**, or press Command-, while DeskHelm is active. Press Command-Q to
+quit. Settings uses four compact toolbar panes: Display, Volume Keys, General,
+and About.
+
+Use the Display pane to drag the volume control, use the arrow keys, or use the
+VoiceOver adjustable action. DeskHelm coalesces rapid preview writes and
+confirms the final target through hardware readback. When keyboard volume
+control is enabled, a transient HUD shows accepted LG volume changes.
 
 Use the CLI to read or set the display volume:
 
 ```sh
 cargo run --locked -p deskhelm -- volume
 cargo run --locked -p deskhelm -- volume 25
+```
+
+Confirm native menu construction, or also open and validate Settings:
+
+```sh
+./script/build_and_run.sh --verify
+./script/build_and_run.sh --verify-settings
 ```
 
 ### Update
@@ -136,6 +158,11 @@ DeskHelm is a workspace-first monorepo:
 - repository-maintenance programs belong under `scripts/`
 - repository-native checks are exposed through `Makefile.toml`
 - durable architecture, runbook, and routing notes belong under `openwiki/`
+
+The AppKit shell owns an image-only `NSStatusItem`, a native `NSMenu`, a reusable
+Settings window, and the transient HUD panel. SwiftUI owns the Settings panes
+and HUD content. Both the app and CLI call the Rust DDC/CI core directly; they
+do not invoke another display-control CLI.
 
 ## Support Me
 

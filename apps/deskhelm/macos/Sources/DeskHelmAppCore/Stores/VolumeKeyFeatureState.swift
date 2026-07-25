@@ -20,6 +20,15 @@ public final class VolumeKeyFeatureState {
     phase == .enabled
   }
 
+  public var isRequested: Bool {
+    switch phase {
+    case .enabling, .enabled:
+      true
+    case .disabled, .permissionRequired, .failed:
+      false
+    }
+  }
+
   public var statusMessage: String? {
     switch phase {
     case .disabled, .enabled:

@@ -11,8 +11,9 @@ final class VolumeKeyController {
   )
   private let store: VolumeStore
   private let state: VolumeKeyFeatureState
+  private let accessibilityPermission: AccessibilityPermission
   private let hud: VolumeHUDController
-  private var shouldPresentHUD: () -> Bool = { true }
+  private var shouldPresentHUD: @MainActor () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = MediaKeyMonitor(
     onAction: { [weak self] action in
@@ -26,10 +27,12 @@ final class VolumeKeyController {
 
   init(
     store: VolumeStore,
-    state: VolumeKeyFeatureState
+    state: VolumeKeyFeatureState,
+    accessibilityPermission: AccessibilityPermission
   ) {
     self.store = store
     self.state = state
+    self.accessibilityPermission = accessibilityPermission
     self.hud = VolumeHUDController()
     store.communicationFailureHandler = { [weak self] message in
       guard self?.state.isEnabled == true else { return }
@@ -48,16 +51,9 @@ final class VolumeKeyController {
     }
   }
 
-  func toggle() {
-    if monitor.isRunning || state.isEnabled {
+  func setEnabled(_ isEnabled: Bool) {
+    if !isEnabled {
       disable()
-      return
-    }
-
-    guard
-      MediaKeyMonitor.hasAccessibilityAccess
-        || confirmAccessibilityRequest()
-    else {
       return
     }
 
@@ -66,21 +62,21 @@ final class VolumeKeyController {
     }
   }
 
+  func setHUDPresentationPolicy(
+    _ policy: @escaping @MainActor () -> Bool
+  ) {
+    shouldPresentHUD = policy
+  }
+
+  func dismissHUD() {
+    hud.invalidate()
+  }
+
   func invalidate() {
     monitor.stop()
     hud.invalidate()
     lastLevelUpdateUptime = nil
     store.communicationFailureHandler = nil
-  }
-
-  func setHUDPresentationCondition(
-    _ condition: @escaping () -> Bool
-  ) {
-    shouldPresentHUD = condition
-  }
-
-  func dismissHUD() {
-    hud.invalidate()
   }
 
   private func enable(requestPermission: Bool) async {
@@ -94,11 +90,11 @@ final class VolumeKeyController {
       return
     }
 
-    if !MediaKeyMonitor.hasAccessibilityAccess, requestPermission {
-      MediaKeyMonitor.requestAccessibilityAccess()
+    if !accessibilityPermission.isGranted, requestPermission {
+      accessibilityPermission.request(prompt: true)
     }
 
-    guard MediaKeyMonitor.hasAccessibilityAccess else {
+    guard accessibilityPermission.refresh() == .granted else {
       UserDefaults.standard.set(false, forKey: Self.preferenceKey)
       state.update(to: .permissionRequired)
       return
@@ -180,22 +176,6 @@ final class VolumeKeyController {
       hud.show(error: message)
     }
     logger.error("Keyboard volume control stopped: \(message, privacy: .public)")
-  }
-
-  private func confirmAccessibilityRequest() -> Bool {
-    let alert = NSAlert()
-    alert.alertStyle = .informational
-    alert.messageText = "Enable Keyboard Volume Control?"
-    alert.informativeText =
-      "macOS requires Accessibility permission so DeskHelm can suppress its "
-      + "disabled-volume response. DeskHelm consumes volume up and volume down "
-      + "only while LG ULTRAGEAR+ is the current audio output. Other audio "
-      + "routes keep normal macOS volume control. DeskHelm does not subscribe "
-      + "to ordinary key presses, store input, or inspect other apps."
-    alert.addButton(withTitle: "Continue")
-    alert.addButton(withTitle: "Cancel")
-
-    return alert.runModal() == .alertFirstButtonReturn
   }
 
   private static let preferenceKey = "VolumeKeysRequested"

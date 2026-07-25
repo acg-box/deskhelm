@@ -12,18 +12,18 @@ struct DeskHelmLaunchPlanTests {
     )
   }
 
-  @Test("Panel verification also restores requested volume keys")
-  func panelVerificationLaunch() {
+  @Test("Settings verification also restores requested volume keys")
+  func settingsVerificationLaunch() {
     #expect(
       DeskHelmLaunchPlan.actions(
         arguments: [
           "/Applications/DeskHelm.app",
-          "--verify-panel",
+          "--verify-settings",
         ]
       )
         == [
           .restoreRequestedVolumeKeys,
-          .showPanelForVerification,
+          .showSettingsForVerification,
         ]
     )
   }

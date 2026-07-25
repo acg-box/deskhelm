@@ -30,7 +30,7 @@ The migration preserves the workspace-first ownership model: runnable code remai
 
 ## Runtime Replacement
 
-The old parser accepted a single placeholder option and logged it. DeskHelm instead provides a shared Rust `read_volume`/`set_volume` core: the CLI exposes it through the required `volume` subcommand, while a native image-only AppKit status item opens a transparent borderless panel whose SwiftUI control surface calls the core through a C ABI. The old project-directory logging, custom panic hook, and compile-time Git/target version build script were removed.
+The old parser accepted a single placeholder option and logged it. DeskHelm instead provides a shared Rust `read_volume`/`set_volume` core: the CLI exposes it through the required `volume` subcommand, while a native image-only AppKit status item owns a system menu and opens a reusable Settings window whose SwiftUI Display pane calls the core through a C ABI. The old project-directory logging, custom panic hook, and compile-time Git/target version build script were removed.
 
 That replacement changes the risk profile: product correctness now depends on conservative display selection, DDC/CI packet validation, an undocumented macOS transport, C-memory ownership and panic containment, Swift confirmed-state behavior, and physical compatibility. Those contracts are detailed in [Architecture and Runtime](architecture-and-runtime.md#display-selection-and-safety), while build and test entrypoints are in [Operations](operations.md#native-app-build-and-run).
 

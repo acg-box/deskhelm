@@ -8,6 +8,8 @@ SWIFT_ROOT="${REPO_ROOT}/apps/deskhelm/macos"
 MODE="run"
 CONFIGURATION="${DESKHELM_CONFIGURATION:-debug}"
 SIGNING_IDENTITY="${DESKHELM_CODE_SIGN_IDENTITY:--}"
+SPARKLE_APPCAST_URL="${DESKHELM_SPARKLE_APPCAST_URL:-}"
+SPARKLE_PUBLIC_ED_KEY="${DESKHELM_SPARKLE_PUBLIC_ED_KEY:-}"
 
 if [[ -z "${DEVELOPER_DIR:-}" ]]; then
 	if [[ -d "/Applications/Xcode-beta.app/Contents/Developer" ]]; then
@@ -33,7 +35,7 @@ SWIFT_PLATFORM_LINKER_ARGUMENTS=(
 )
 
 usage() {
-	echo "Usage: $0 [--run|--build-only|--test|--verify|--verify-panel|--debug|--logs|--telemetry]"
+	echo "Usage: $0 [--run|--build-only|--test|--verify|--verify-settings|--debug|--logs|--telemetry]"
 }
 
 if [[ $# -gt 1 ]]; then
@@ -47,7 +49,7 @@ if [[ $# -eq 1 ]]; then
 		--build-only) MODE="build-only" ;;
 		--test) MODE="test" ;;
 		--verify) MODE="verify" ;;
-		--verify-panel) MODE="verify-panel" ;;
+		--verify-settings) MODE="verify-settings" ;;
 		--debug) MODE="debug" ;;
 		--logs) MODE="logs" ;;
 		--telemetry) MODE="telemetry" ;;
@@ -69,6 +71,12 @@ case "${CONFIGURATION}" in
 		exit 2
 		;;
 esac
+
+if [[ -n "${SPARKLE_APPCAST_URL}" || -n "${SPARKLE_PUBLIC_ED_KEY}" ]] \
+	&& [[ -z "${SPARKLE_APPCAST_URL}" || -z "${SPARKLE_PUBLIC_ED_KEY}" ]]; then
+	echo "DESKHELM_SPARKLE_APPCAST_URL and DESKHELM_SPARKLE_PUBLIC_ED_KEY must be set together." >&2
+	exit 2
+fi
 
 RUST_LIBRARY_DIRECTORY="${REPO_ROOT}/target/${CONFIGURATION}"
 export DESKHELM_RUST_LIB_DIR="${RUST_LIBRARY_DIRECTORY}"
@@ -119,13 +127,45 @@ verify_linked_sdk() {
 	fi
 }
 
+staged_rpaths() {
+	/usr/bin/otool -l "$1" \
+		| /usr/bin/awk '
+			$1 == "cmd" && $2 == "LC_RPATH" {
+				in_rpath = 1
+				next
+			}
+			in_rpath && $1 == "path" {
+				print $2
+				in_rpath = 0
+			}
+		'
+}
+
+sanitize_staged_rpaths() {
+	local executable="$1"
+	local rpath
+
+	while IFS= read -r rpath; do
+		case "${rpath}" in
+			"${SWIFT_ROOT}"/.build/* | \
+				/Applications/*.app/Contents/Developer/* | \
+				/Library/Developer/CommandLineTools/* | \
+				/var/run/com.apple.security.cryptexd/*)
+				/usr/bin/install_name_tool -delete_rpath "${rpath}" "${executable}"
+				;;
+		esac
+	done < <(staged_rpaths "${executable}")
+}
+
 stage_app_bundle() {
 	local binary_directory
 	local executable
 	local app_directory="${SWIFT_ROOT}/dist/DeskHelm.app"
 	local contents_directory="${app_directory}/Contents"
 	local macos_directory="${contents_directory}/MacOS"
+	local frameworks_directory="${contents_directory}/Frameworks"
 	local info_plist="${contents_directory}/Info.plist"
+	local sparkle_framework
 
 	binary_directory="$(swift_binary_directory)"
 	executable="${binary_directory}/DeskHelmMac"
@@ -136,11 +176,36 @@ stage_app_bundle() {
 	fi
 
 	/bin/rm -rf "${app_directory}"
-	/usr/bin/install -d "${macos_directory}"
+	/usr/bin/install -d "${macos_directory}" "${frameworks_directory}"
 	/usr/bin/ditto "${executable}" "${macos_directory}/DeskHelmMac"
+
+	sparkle_framework="$(
+		/usr/bin/find "${SWIFT_ROOT}/.build/artifacts" \
+			-type d \
+			-name Sparkle.framework \
+			-print \
+			-quit 2>/dev/null \
+			|| true
+	)"
+	if [[ -z "${sparkle_framework}" ]]; then
+		echo "SwiftPM did not resolve Sparkle.framework." >&2
+		exit 1
+	fi
+	/usr/bin/ditto \
+		"${sparkle_framework}" \
+		"${frameworks_directory}/Sparkle.framework"
+
+	sanitize_staged_rpaths "${macos_directory}/DeskHelmMac"
+	if ! /usr/bin/otool -l "${macos_directory}/DeskHelmMac" \
+		| /usr/bin/grep -q '@executable_path/../Frameworks'; then
+		/usr/bin/install_name_tool \
+			-add_rpath '@executable_path/../Frameworks' \
+			"${macos_directory}/DeskHelmMac"
+	fi
 
 	/usr/bin/plutil -create xml1 "${info_plist}"
 	/usr/bin/plutil -insert CFBundleDevelopmentRegion -string "en" "${info_plist}"
+	/usr/bin/plutil -insert CFBundleDisplayName -string "DeskHelm" "${info_plist}"
 	/usr/bin/plutil -insert CFBundleExecutable -string "DeskHelmMac" "${info_plist}"
 	/usr/bin/plutil -insert CFBundleIdentifier -string "com.acgbox.deskhelm" "${info_plist}"
 	/usr/bin/plutil -insert CFBundleInfoDictionaryVersion -string "6.0" "${info_plist}"
@@ -154,13 +219,34 @@ stage_app_bundle() {
 	/usr/bin/plutil -insert LSUIElement -bool true "${info_plist}"
 	/usr/bin/plutil -insert NSHighResolutionCapable -bool true "${info_plist}"
 	/usr/bin/plutil -insert NSPrincipalClass -string "NSApplication" "${info_plist}"
+
+	if [[ -n "${SPARKLE_APPCAST_URL}" ]]; then
+		/usr/bin/plutil -insert SUFeedURL \
+			-string "${SPARKLE_APPCAST_URL}" \
+			"${info_plist}"
+		/usr/bin/plutil -insert SUPublicEDKey \
+			-string "${SPARKLE_PUBLIC_ED_KEY}" \
+			"${info_plist}"
+		/usr/bin/plutil -insert SUEnableAutomaticChecks -bool true "${info_plist}"
+		/usr/bin/plutil -insert SUAllowsAutomaticUpdates -bool true "${info_plist}"
+		/usr/bin/plutil -insert SUScheduledCheckInterval -integer 86400 "${info_plist}"
+	fi
+
 	/usr/bin/codesign \
 		--force \
+		--deep \
 		--sign "${SIGNING_IDENTITY}" \
-		--identifier "com.acgbox.deskhelm" \
+		--timestamp=none \
+		"${frameworks_directory}/Sparkle.framework"
+	/usr/bin/codesign \
+		--force \
+		--deep \
+		--sign "${SIGNING_IDENTITY}" \
 		--timestamp=none \
 		"${app_directory}"
 	/usr/bin/codesign --verify --deep --strict "${app_directory}"
+	/usr/bin/otool -L "${macos_directory}/DeskHelmMac" \
+		| /usr/bin/grep -q 'Sparkle.framework'
 
 	echo "${app_directory}"
 }
@@ -189,8 +275,8 @@ launch_app() {
 		fi
 	fi
 
-	if [[ "${MODE}" == "verify-panel" ]]; then
-		open_arguments+=(--args --verify-panel)
+	if [[ "${MODE}" == "verify-settings" ]]; then
+		open_arguments+=(--args --verify-settings)
 	fi
 
 	/usr/bin/open "${open_arguments[@]}"
@@ -221,19 +307,20 @@ fi
 build_swift_app
 verify_linked_sdk
 
+APP_DIRECTORY="$(stage_app_bundle)"
+
 if [[ "${MODE}" == "build-only" ]]; then
-	echo "Built DeskHelmMac with ${DEVELOPER_DIR}."
+	echo "Built and staged ${APP_DIRECTORY} with ${DEVELOPER_DIR}."
 	exit 0
 fi
 
-APP_DIRECTORY="$(stage_app_bundle)"
 launch_app "${APP_DIRECTORY}"
 
 case "${MODE}" in
 	run)
 		echo "Launched ${APP_DIRECTORY} (PID ${APP_PID})."
 		;;
-	verify|verify-panel)
+	verify|verify-settings)
 		sleep 1
 		if ! /bin/kill -0 "${APP_PID}" 2>/dev/null; then
 			echo "DeskHelm menu-bar process exited during verification." >&2
@@ -260,7 +347,7 @@ case "${MODE}" in
 		STATUS_ITEM_READY_SUMMARY="$(
 			/usr/bin/defaults read com.acgbox.deskhelm StatusItemReadySummary
 		)"
-		EXPECTED_STATUS_ITEM_SUMMARY="button=true image=true visible=true window=true titleEmpty=true panel=true"
+		EXPECTED_STATUS_ITEM_SUMMARY="button=true image=true visible=true window=true titleEmpty=true menu=true panel=false"
 		if [[ "${STATUS_ITEM_READY_SUMMARY}" != "${EXPECTED_STATUS_ITEM_SUMMARY}" ]]; then
 			echo "DeskHelm published an incomplete NSStatusItem readiness state: ${STATUS_ITEM_READY_SUMMARY}" >&2
 			exit 1
@@ -268,41 +355,46 @@ case "${MODE}" in
 
 		echo "Confirmed DeskHelm NSStatusItem readiness for PID ${APP_PID}: ${STATUS_ITEM_READY_SUMMARY}"
 
-		if [[ "${MODE}" == "verify-panel" ]]; then
-			PANEL_STATE_PID=""
-			for attempt in {1..20}; do
-				PANEL_STATE_PID="$(
-					/usr/bin/defaults read com.acgbox.deskhelm PanelStatePID 2>/dev/null \
+		if [[ "${MODE}" == "verify-settings" ]]; then
+			SETTINGS_STATE_PID=""
+			SETTINGS_STATE_SUMMARY=""
+			for attempt in {1..40}; do
+				SETTINGS_STATE_PID="$(
+					/usr/bin/defaults read com.acgbox.deskhelm SettingsWindowStatePID 2>/dev/null \
 						|| true
 				)"
-				if [[ "${PANEL_STATE_PID}" == "${APP_PID}" ]]; then
+				SETTINGS_STATE_SUMMARY="$(
+					/usr/bin/defaults read com.acgbox.deskhelm SettingsWindowStateSummary 2>/dev/null \
+						|| true
+				)"
+				if [[ "${SETTINGS_STATE_PID}" == "${APP_PID}" ]] \
+					&& [[ "${SETTINGS_STATE_SUMMARY}" == *" visible=true "* ]] \
+					&& [[ "${SETTINGS_STATE_SUMMARY}" == *" key=true "* ]] \
+					&& [[ "${SETTINGS_STATE_SUMMARY}" == *" main=true "* ]]; then
 					break
 				fi
 				sleep 0.25
 			done
 
-			if [[ "${PANEL_STATE_PID}" != "${APP_PID}" ]]; then
-				echo "DeskHelm did not publish panel state for PID ${APP_PID}." >&2
+			if [[ "${SETTINGS_STATE_PID}" != "${APP_PID}" ]]; then
+				echo "DeskHelm did not publish Settings state for PID ${APP_PID}." >&2
 				exit 1
 			fi
 
-			PANEL_STATE_SUMMARY="$(
-				/usr/bin/defaults read com.acgbox.deskhelm PanelStateSummary
-			)"
-			if [[ ! "${PANEL_STATE_SUMMARY}" =~ ^phase=(shown|refreshed)\  ]] \
-				|| [[ "${PANEL_STATE_SUMMARY}" != *" visible=true "* ]] \
-				|| [[ "${PANEL_STATE_SUMMARY}" != *" key=true "* ]] \
-				|| [[ "${PANEL_STATE_SUMMARY}" != *" nonactivating=true "* ]] \
-				|| [[ "${PANEL_STATE_SUMMARY}" != *" keyOnlyIfNeeded=false "* ]] \
-				|| [[ "${PANEL_STATE_SUMMARY}" != *" onScreen=true "* ]] \
-				|| [[ ! "${PANEL_STATE_SUMMARY}" =~ windowNumber=([1-9][0-9]*) ]] \
-				|| [[ ! "${PANEL_STATE_SUMMARY}" =~ width=([1-9][0-9]*) ]] \
-				|| [[ ! "${PANEL_STATE_SUMMARY}" =~ height=([1-9][0-9]*)$ ]]; then
-				echo "DeskHelm did not keep a visible key panel: ${PANEL_STATE_SUMMARY}" >&2
+			if [[ ! "${SETTINGS_STATE_SUMMARY}" =~ ^phase=(shown|focused|key)\  ]] \
+				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" visible=true "* ]] \
+				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" key=true "* ]] \
+				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" main=true "* ]] \
+				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" onScreen=true "* ]] \
+				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" toolbar=icons pane="* ]] \
+				|| [[ ! "${SETTINGS_STATE_SUMMARY}" =~ windowNumber=([1-9][0-9]*) ]] \
+				|| [[ ! "${SETTINGS_STATE_SUMMARY}" =~ width=([1-9][0-9]*) ]] \
+				|| [[ ! "${SETTINGS_STATE_SUMMARY}" =~ height=([1-9][0-9]*)$ ]]; then
+				echo "DeskHelm did not keep a visible key Settings window: ${SETTINGS_STATE_SUMMARY}" >&2
 				exit 1
 			fi
 
-			echo "Confirmed DeskHelm panel readiness for PID ${APP_PID}: ${PANEL_STATE_SUMMARY}"
+			echo "Confirmed DeskHelm Settings readiness for PID ${APP_PID}: ${SETTINGS_STATE_SUMMARY}"
 		fi
 		;;
 	debug)

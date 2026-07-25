@@ -1,66 +1,29 @@
 import SwiftUI
 
-public struct VolumePanel: View {
+public struct DisplaySettingsView: View {
   @Bindable private var store: VolumeStore
-  @Bindable private var volumeKeyState: VolumeKeyFeatureState
   @State private var isEditing = false
 
-  private let onQuit: () -> Void
-  private let onToggleVolumeKeys: () -> Void
-
-  public init(
-    store: VolumeStore,
-    volumeKeyState: VolumeKeyFeatureState,
-    onToggleVolumeKeys: @escaping () -> Void,
-    onQuit: @escaping () -> Void
-  ) {
+  public init(store: VolumeStore) {
     self.store = store
-    self.volumeKeyState = volumeKeyState
-    self.onToggleVolumeKeys = onToggleVolumeKeys
-    self.onQuit = onQuit
   }
 
   public var body: some View {
-    singleGlassSurface
-      .padding(10)
-  }
-
-  @ViewBuilder
-  private var singleGlassSurface: some View {
-    if #available(macOS 26.0, *) {
-      panelContent
-        .glassEffect(
-          .clear.interactive(),
-          in: RoundedRectangle(cornerRadius: 28, style: .continuous)
-        )
-    } else {
-      panelContent
-        .background(
-          .regularMaterial,
-          in: RoundedRectangle(cornerRadius: 28, style: .continuous)
-        )
-    }
-  }
-
-  private var panelContent: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: 12) {
       header
       volumeControl
       errorStatus
-      volumeKeyStatus
     }
-    .padding(.horizontal, 20)
-    .padding(.vertical, 16)
-    .frame(width: 360)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private var header: some View {
     HStack(alignment: .center, spacing: 10) {
       VStack(alignment: .leading, spacing: 2) {
         Text("LG 39GX950B")
-          .font(.title3.weight(.semibold))
+          .font(.headline)
         Text("USB-C · DDC/CI")
-          .font(.callout)
+          .font(.caption)
           .foregroundStyle(.secondary)
       }
       .help(store.displayName)
@@ -85,36 +48,6 @@ public struct VolumePanel: View {
       .help("Read volume from the display")
       .accessibilityLabel("Refresh monitor volume")
       .accessibilityIdentifier("refresh-volume")
-
-      Menu {
-        Button {
-          onToggleVolumeKeys()
-        } label: {
-          Label(
-            volumeKeyState.isEnabled
-              ? "Disable Volume Keys"
-              : "Enable Volume Keys…",
-            systemImage: "keyboard"
-          )
-        }
-        .disabled(volumeKeyState.phase == .enabling)
-
-        Divider()
-
-        Button {
-          onQuit()
-        } label: {
-          Label("Quit DeskHelm", systemImage: "power")
-        }
-      } label: {
-        Image(systemName: "ellipsis")
-      }
-      .font(.system(size: 16, weight: .semibold))
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .frame(width: 24, height: 24)
-      .help("DeskHelm menu")
-      .accessibilityLabel("DeskHelm menu")
     }
   }
 
@@ -153,16 +86,6 @@ public struct VolumePanel: View {
     }
   }
 
-  @ViewBuilder
-  private var volumeKeyStatus: some View {
-    if let message = volumeKeyState.statusMessage {
-      Label(message, systemImage: "keyboard.badge.ellipsis")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("volume-key-status")
-    }
-  }
 }
 
 @MainActor

@@ -1,7 +1,7 @@
 ---
 type: Operations Runbook
 title: DeskHelm Operations and Validation
-description: Documents DeskHelm Rust and Swift builds, native app staging and diagnostics, validation, CI, release packaging, and publication procedures.
+description: Documents DeskHelm Rust and Swift builds, Sparkle-aware app staging and signing, native status-menu and Settings diagnostics, validation, CI, and release packaging.
 tags: [deskhelm, operations, swiftpm, ci, release]
 ---
 
@@ -107,7 +107,11 @@ The repository-owned SwiftPM entrypoint builds the Rust static library, links th
 ./script/build_and_run.sh
 ```
 
-The script uses `DESKHELM_CONFIGURATION=debug` by default; set it to `release` for Cargo and Swift release builds. It exports `DESKHELM_RUST_LIB_DIR` as `target/<configuration>` so `apps/deskhelm/macos/Package.swift` can link `libdeskhelm`. Swift build, test, and binary-path queries receive explicit `-platform_version macos` linker arguments with deployment minimum 14.0 and the SDK version selected by `xcrun`; after an app build, `vtool` must report that same linked SDK or the script fails. This avoids SwiftPM's swiftbuild backend recording the deployment target as both build-version values, which would lose current linked-on UI behavior. Launching modes stage `apps/deskhelm/macos/dist/DeskHelm.app` with executable `DeskHelmMac`, bundle ID `com.acgbox.deskhelm`, macOS 14 minimum, and `LSUIElement=true`, then sign and verify it. Signing is ad hoc by default; `DESKHELM_CODE_SIGN_IDENTITY` selects an authorized Apple Development identity when Accessibility authorization must persist across rebuilds. `--build-only` stops after the Rust and Swift builds plus linked-SDK verification and does not stage the bundle. This local development bundle is not the artifact produced by the CLI release workflow.
+The script uses `DESKHELM_CONFIGURATION=debug` by default; set it to `release` for Cargo and Swift release builds. It exports `DESKHELM_RUST_LIB_DIR` as `target/<configuration>` so `apps/deskhelm/macos/Package.swift` can link `libdeskhelm`. Swift build, test, and binary-path queries receive explicit `-platform_version macos` linker arguments with deployment minimum 14.0 and the SDK version selected by `xcrun`; after an app build, `vtool` must report that same linked SDK or the script fails. This avoids SwiftPM's swiftbuild backend recording the deployment target as both build-version values, which would lose current linked-on UI behavior.
+
+Every non-test mode now stages `apps/deskhelm/macos/dist/DeskHelm.app`, including `--build-only`. The staged bundle contains executable `DeskHelmMac`, bundle ID `com.acgbox.deskhelm`, macOS 14 minimum, `LSUIElement=true`, and the exact SwiftPM Sparkle 2.9.4 framework under `Contents/Frameworks`. Staging removes development-only rpaths, adds `@executable_path/../Frameworks` when missing, signs the framework and app, verifies the deep signature, and confirms the executable links Sparkle. Signing is ad hoc by default; `DESKHELM_CODE_SIGN_IDENTITY` selects an authorized Apple Development identity when Accessibility authorization must persist across rebuilds.
+
+`DESKHELM_SPARKLE_APPCAST_URL` and `DESKHELM_SPARKLE_PUBLIC_ED_KEY` are optional staging inputs and must be supplied together. When present, the script adds the HTTPS feed, Ed25519 public key, daily checks, and automatic-update capability to `Info.plist`; `SoftwareUpdater` still validates the feed URL and requires a base64-decoded 32-byte public key before enabling Sparkle. When absent, the app labels the action **View Releases…** and opens GitHub Releases. These values are release configuration, not source defaults. This local development bundle remains separate from the CLI artifact produced by the release workflow.
 
 ```mermaid
 flowchart TD
@@ -117,12 +121,14 @@ flowchart TD
     Mode -->|other| Swift["Build SwiftPM executable"]
     Swift --> SDK["Verify linked SDK identity"]
     SDK --> BuildOnly{"Build only"}
-    BuildOnly -->|yes| Stop["Report successful build"]
-    BuildOnly -->|no| Stage["Stage and sign DeskHelm.app"]
-    Stage --> Launch["Stop prior process and open app"]
+    BuildOnly -->|yes| Stage["Stage and sign DeskHelm.app"]
+    BuildOnly -->|no| Stage
+    Stage --> Finish{"Build only"}
+    Finish -->|yes| Stop["Report staged app"]
+    Finish -->|no| Launch["Stop prior process and open app"]
     Launch --> Action{"Run or diagnostic mode"}
-    Action --> Verify["Verify status item readiness"]
-    Action --> VerifyPanel["Verify panel window state"]
+    Action --> Verify["Verify native status menu"]
+    Action --> VerifySettings["Verify Settings window state"]
     Action --> Debug["Attach LLDB"]
     Action --> Logs["Stream unified logs"]
     Action --> Telemetry["Record Time Profiler trace"]
@@ -135,17 +141,17 @@ The script owns the native build, staging, launch, and diagnostic branches.
 | Mode | Behavior |
 | --- | --- |
 | no argument or `--run` | Build Rust and Swift, stage the app, replace a running `DeskHelmMac`, and launch |
-| `--build-only` | Build Rust and Swift, verify the executable's linked SDK, and stop without staging or launching; used by `check-swift` |
+| `--build-only` | Build Rust and Swift, verify the linked SDK, stage and sign the app with Sparkle, and stop without launching; used by `check-swift` |
 | `--test` | Build the Rust library and run Swift tests with the explicit platform-version linker arguments, without staging or launching |
-| `--verify` | Launch, then confirm the process stays alive and publishes the expected `NSStatusItem` readiness state |
-| `--verify-panel` | Launch with the panel open, then confirm status-item readiness plus visible, key, nonactivating, on-screen panel state and positive dimensions |
+| `--verify` | Launch, then confirm the process stays alive and publishes the expected native `NSStatusItem` menu readiness state |
+| `--verify-settings` | Launch with Settings requested, then confirm status-menu readiness plus visible, key, main, on-screen Settings state, toolbar/pane metadata, and positive dimensions |
 | `--debug` | Launch and attach LLDB to the process |
 | `--logs` | Launch and stream unified logs for `DeskHelmMac` |
 | `--telemetry` | Launch and record a Time Profiler trace under `apps/deskhelm/macos/dist/` |
 
-`--verify` checks that DeskHelm created its square, image-only status item and owns a panel using app-published `UserDefaults`. It cannot prove the panel material or that macOS visually presents the item when menu-bar space, a notch, or a third-party menu manager intervenes. `--verify-panel` additionally checks the app-published panel phase, visibility, key-window and nonactivating state, screen intersection, window number, and dimensions. Both normal and panel-verification launches also attempt to restore a previously requested volume-key feature; restoration does not prompt when Accessibility trust is missing. Neither mode tests click-away dismissal, Accessibility prompting, successful media-key interception, the transient HUD, or physical DDC/CI behavior. The app lifecycle behind these checks is documented in [Architecture and Runtime](architecture-and-runtime.md#native-appkit-shell), and the opt-in event path is documented in [Architecture and Runtime](architecture-and-runtime.md#optional-keyboard-volume-control).
+`--verify` checks through app-published `UserDefaults` that DeskHelm created its square, image-only status item and attached a native menu. It cannot prove that macOS visually presents the item when menu-bar space, a notch, or a third-party menu manager intervenes. `--verify-settings` additionally checks the published Settings phase, visibility, key/main state, screen intersection, icon-toolbar pane metadata, window number, and dimensions. Both normal and Settings-verification launches attempt to restore a previously requested volume-key feature; restoration does not prompt when Accessibility trust is missing. Neither mode tests menu and toolbar interaction, Accessibility prompting or drag-and-drop, login registration, Sparkle UI, successful media-key interception, the transient HUD, or physical DDC/CI behavior. The app lifecycle behind these checks is documented in [Architecture and Runtime](architecture-and-runtime.md#native-appkit-shell-and-settings), and the opt-in event path is documented in [Architecture and Runtime](architecture-and-runtime.md#optional-keyboard-volume-control).
 
-Swift tests under `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/` exercise launch-plan restoration in normal and panel-verification modes, initial-loading visibility, refresh-state separation, one requested refresh waiting for an active preview, a direct caller joining that request, continuous draft clamping, volume-state validation, refresh behavior, latest-target preview coalescing, automatic and release-time confirmation, refresh and stale-result races, failure recovery, cadence-derived animation planning, shared visual-presentation clamping, per-place digit-transition mapping, decoder allowlisting, system-repeat acceptance, and one-point media-key adjustment. They do not separately cover a refresh requested during confirmation or duplicate button requests. They also do not exercise the custom control's pointer, keyboard, or VoiceOver interaction, rolling-number rendering, menu/HUD coordination, AppKit window or focus behavior, Accessibility permission, the live event tap, rendered interpolation or Liquid Glass appearance, opaque-session timing on physical hardware, or display reconfiguration. The tested contracts support the [SwiftUI panel and optional keyboard HUD runtime](architecture-and-runtime.md#swiftui-volume-panel).
+Swift tests under `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/` exercise launch-plan restoration in normal and Settings-verification modes, initial-loading visibility, refresh-state separation, one requested refresh waiting for an active preview, a direct caller joining that request, continuous draft clamping, volume-state validation, refresh behavior, latest-target preview coalescing, automatic and release-time confirmation, refresh and stale-result races, failure recovery, cadence-derived animation planning, shared visual-presentation clamping, per-place digit-transition mapping, decoder allowlisting, system-repeat acceptance, one-point media-key adjustment, and volume-key feature-state transitions. They do not separately cover a refresh requested during confirmation or duplicate button requests. They also do not exercise the custom control's pointer, keyboard, or VoiceOver interaction, rolling-number rendering, native menu commands, Settings toolbar/window focus, permission prompting or dragging, login-item registration, Sparkle UI, Settings/HUD coordination, the live event tap, rendered interpolation, opaque-session timing on physical hardware, or display reconfiguration. The tested contracts support the [SwiftUI Display and optional keyboard HUD runtime](architecture-and-runtime.md#swiftui-display-settings).
 
 Sources: `script/build_and_run.sh`, `apps/deskhelm/macos/Package.swift`, `apps/deskhelm/macos/Sources/`, `apps/deskhelm/macos/Tests/`, `Makefile.toml`.
 

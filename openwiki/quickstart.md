@@ -1,7 +1,7 @@
 ---
 type: Getting Started Guide
 title: DeskHelm Quickstart
-description: Introduces the DeskHelm native macOS menu-bar app and shared Rust CLI, supported LG 39GX950B USB-C hardware path, build commands, and documentation map.
+description: Introduces the DeskHelm native macOS status-menu app, four-pane Settings workflow, shared Rust CLI, supported LG 39GX950B USB-C hardware path, and validation commands.
 tags: [deskhelm, quickstart, macos, ddc-ci]
 ---
 
@@ -11,7 +11,7 @@ tags: [deskhelm, quickstart, macos, ddc-ci]
 
 DeskHelm is an early native macOS menu-bar prototype for controlling audio volume on an external LG display. A Rust core reads and sets DDC/CI VCP feature `0x62`; both a command-line interface and a native AppKit/SwiftUI app use that same core. DeskHelm does not invoke another display-control executable.
 
-The Rust package lives in `apps/deskhelm/`. Its `rlib` supports the CLI and its `staticlib` exposes a narrow C ABI to the SwiftPM package under `apps/deskhelm/macos/`. The app uses an AppKit `NSStatusItem` and transparent borderless `NSPanel` to host a SwiftUI volume panel. [Architecture and Runtime](architecture-and-runtime.md) explains that call path and the hardware safety boundary. [Operations](operations.md) owns exact build, test, staging, launch, and diagnostic commands.
+The Rust package lives in `apps/deskhelm/`. Its `rlib` supports the CLI and its `staticlib` exposes a narrow C ABI to the SwiftPM package under `apps/deskhelm/macos/`. The app uses an AppKit `NSStatusItem` with a native menu and a reusable Settings window whose SwiftUI panes own display control, volume-key setup, login behavior, and update preferences. [Architecture and Runtime](architecture-and-runtime.md) explains that call path and the hardware safety boundary. [Operations](operations.md) owns exact build, test, staging, launch, and diagnostic commands.
 
 Sources: `README.md`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/`, `apps/deskhelm/macos/`, `script/build_and_run.sh`.
 
@@ -32,7 +32,9 @@ Build the Rust core and Swift package, stage `DeskHelm.app`, and open it:
 ./script/build_and_run.sh
 ```
 
-DeskHelm runs with accessory activation policy and `LSUIElement=true`, so it has no Dock icon. Select its square control-deck status icon; the item has no text title. It opens a transparent borderless nonactivating panel that sizes itself to the hosted SwiftUI content and stays within the visible screen. The first successful refresh creates a verified display session and enables the volume control. Pointer dragging updates the UI immediately and sends coalesced latest-target preview writes through that session; arrow keys and the VoiceOver adjustable action move by one point. A preview does not replace the confirmed value. DeskHelm reads the final target back after 150 ms without new input, or immediately when a drag ends. Selecting refresh during preview or confirmation retains one request and reads when the active work finishes. A mismatch triggers one exact write and readback. If recovery cannot read the display, DeskHelm clears the confirmed state and disables adjustment instead of restoring an unverified old value.
+DeskHelm normally runs with accessory activation policy and `LSUIElement=true`, so it has no Dock icon. Select its square, image-only control-deck status icon to open the native menu. Choose **Settings…**, or press Command-, while DeskHelm is active, to open the reusable Settings window; Command-Q quits. Its compact toolbar switches among Display, Volume Keys, General, and About panes.
+
+The Display pane starts a hardware refresh when it appears. The first successful refresh creates a verified display session and enables the volume control. Pointer dragging updates the UI immediately and sends coalesced latest-target preview writes through that session; arrow keys and the VoiceOver adjustable action move by one point. A preview does not replace the confirmed value. DeskHelm reads the final target back after 150 ms without new input, or immediately when a drag ends. Selecting refresh during preview or confirmation retains one request and reads when the active work finishes. A mismatch triggers one exact write and readback. If recovery cannot read the display, DeskHelm clears the confirmed state and disables adjustment instead of restoring an unverified old value.
 
 Confirm that the launched app created its AppKit status item:
 
@@ -40,17 +42,17 @@ Confirm that the launched app created its AppKit status item:
 ./script/build_and_run.sh --verify
 ```
 
-This verifies the app-owned status item, not whether macOS has enough visible menu-bar space. To also open the panel and verify that AppKit made it visible, key, nonactivating, and positioned on the status item's screen, run:
+This verifies app-owned native status-menu construction, not whether macOS has enough visible menu-bar space. To also open Settings and verify that AppKit made its window visible, key, main, on-screen, and toolbar-backed, run:
 
 ```sh
-./script/build_and_run.sh --verify-panel
+./script/build_and_run.sh --verify-settings
 ```
 
-Neither diagnostic proves click-away dismissal, Accessibility prompting, media-key interception, HUD presentation, or physical DDC/CI behavior. On macOS 26 or later the panel uses public Liquid Glass APIs; macOS 14 through 25 use adaptive system material. See [Architecture and Runtime](architecture-and-runtime.md#native-appkit-shell) for lifecycle and state details, and [Operations](operations.md#script-modes-and-diagnostics) for the exact diagnostic contract.
+Neither diagnostic proves toolbar interaction, Accessibility prompting or app dragging, login-item registration, Sparkle presentation, media-key interception, HUD presentation, or physical DDC/CI behavior. See [Architecture and Runtime](architecture-and-runtime.md#native-appkit-shell-and-settings) for lifecycle and state details, and [Operations](operations.md#script-modes-and-diagnostics) for the exact diagnostic contract.
 
 ### Optional Keyboard Volume Keys
 
-From the panel's ellipsis menu, select **Enable Volume Keys…**. DeskHelm first confirms that it can read the display, then asks for macOS Accessibility permission; after granting access, select the command again. While enabled, each volume-up or volume-down press or system repeat moves the display by one point only when the current macOS default audio output is the one unique matching LG UltraGear DisplayPort route. Holding a key uses the existing macOS repeat events for continuous adjustment. DeskHelm coalesces rapid repeats into latest-target preview writes and confirms once after input stops. When the menu panel is closed, an app-owned transient HUD shows accepted updates; opening the menu dismisses that HUD, and while the menu is presented its volume control animates without a second overlay. Mute is not intercepted.
+Open **Settings > Volume Keys**. If Accessibility access is missing, request it, open the correct System Settings page, or drag the DeskHelm app chip into the Accessibility application list; then enable **Keyboard Volume Control**. While enabled, each volume-up or volume-down press or system repeat moves the display by one point only when the current macOS default audio output is the one unique matching LG UltraGear route that Core Audio classifies as DisplayPort. The verified physical connection remains USB-C. Holding a key uses the existing macOS repeat events for continuous adjustment. DeskHelm coalesces rapid repeats into latest-target preview writes and confirms once after input stops. When Settings is not being presented, an app-owned transient HUD shows accepted updates; opening Settings dismisses that HUD and suppresses a second overlay. Mute is not intercepted.
 
 This opt-in path receives only macOS system-defined events. It consumes recognized volume-up/down events for the target display, but passes them through for Mac speakers, headphones, other displays, an ambiguous LG match, or an unreadable output route; Accessibility trust is broader than that filter. If permission is missing, macOS disables the event tap, or display communication fails, DeskHelm stops interception so later keys return to normal system handling. [Architecture and Runtime](architecture-and-runtime.md#optional-keyboard-volume-control) owns the security, routing, lifecycle, and failure contract.
 
@@ -79,11 +81,11 @@ On macOS, the aggregate builds the native app and runs its Swift tests in additi
 ./script/build_and_run.sh --test
 ```
 
-The Swift tests cover volume-state validation, refresh outcomes, one requested refresh waiting for an active preview, a direct caller joining that request, preview coalescing, automatic and release-time confirmation, stale-result protection, hardware-state recovery, cadence-derived animation planning, presentation-scalar clamping, per-place digit-transition mapping, media-key decoding, and one-point adjustment. They do not render-test the custom pointer, keyboard, or VoiceOver control, rolling number, menu/HUD coordination, or window focus. Rust tests cover the CLI, session identity policy, DDC message pacing, packet behavior, and C ABI ownership. Neither suite replaces live Accessibility/event-tap checks or a physical LG 39GX950B check. [Operations](operations.md#public-check-aggregate) gives the full task contract and diagnostic sequence.
+The Swift tests cover volume-state validation, refresh outcomes, one requested refresh waiting for an active preview, a direct caller joining that request, preview coalescing, automatic and release-time confirmation, stale-result protection, hardware-state recovery, cadence-derived animation planning, presentation-scalar clamping, per-place digit-transition mapping, media-key decoding, one-point adjustment, and launch-plan selection for Settings verification. They do not render-test the custom pointer, keyboard, or VoiceOver control, rolling number, Settings toolbar and focus, permission dragging, login-item registration, Sparkle UI, or Settings/HUD coordination. Rust tests cover the CLI, session identity policy, DDC message pacing, packet behavior, and C ABI ownership. Neither suite replaces live Accessibility/event-tap checks or a physical LG 39GX950B check. [Operations](operations.md#public-check-aggregate) gives the full task contract and diagnostic sequence.
 
 ## Wiki Map
 
-- [Architecture and Runtime](architecture-and-runtime.md) - Rust core, C ABI, AppKit shell, SwiftUI panel, DDC/CI flow, and LG 39GX950B USB-C boundary.
+- [Architecture and Runtime](architecture-and-runtime.md) - Rust core, C ABI, AppKit status menu and Settings shell, SwiftUI display workflow, app services, DDC/CI flow, and hardware boundary.
 - [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and CLI release packaging.
 - [Template Adoption](template-adoption.md) - completed transition from the placeholder template to DeskHelm and identity consistency checks.
 - [Knowledge Maintenance](knowledge-maintenance.md) - OpenWiki routing, claim ownership, manual regeneration, evidence rules, and historical documentation decisions.
