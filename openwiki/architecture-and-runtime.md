@@ -1,7 +1,7 @@
 ---
 type: Architecture Reference
 title: DeskHelm Architecture and Runtime
-description: Describes the shared Rust display core, C ABI, native AppKit menu-bar shell, SwiftUI volume workflow, and LG 39GX950B USB-C DDC/CI boundary.
+description: Describes the shared Rust display core, C ABI, native AppKit status menu and Settings shell, SwiftUI settings workflows, app services, and LG 39GX950B USB-C DDC/CI boundary.
 tags: [deskhelm, architecture, rust, swift, appkit, ddc-ci]
 ---
 
@@ -36,7 +36,7 @@ The CLI and menu-bar app share the Rust display core; neither invokes another di
 sequenceDiagram
     actor User
     participant Shell as AppKit Shell
-    participant Panel as SwiftUI Panel
+    participant Settings as SwiftUI Settings
     participant Store as Volume Store
     participant Adapter as Swift Core Adapter
     participant ABI as Rust C ABI
@@ -44,8 +44,9 @@ sequenceDiagram
     participant Mac as macOS DDC Transport
     participant LG as LG 39GX950B
 
-    User->>Shell: Open panel from control-deck icon
-    Shell->>Store: refresh
+    User->>Shell: Choose Settings from status menu
+    Shell->>Settings: Present Display pane
+    Settings->>Store: request refresh
     Store->>Adapter: readVolume
     Adapter->>ABI: create session
     ABI->>Core: discover and verify display
@@ -56,10 +57,10 @@ sequenceDiagram
     ABI-->>Adapter: session and owned result
     Adapter->>ABI: free result
     Adapter-->>Store: validated reading
-    Store-->>Panel: confirmed and draft levels
-    User->>Panel: Drag slider
-    Panel->>Store: publish draft and queue latest target
-    Store-->>Panel: immediate optimistic value
+    Store-->>Settings: confirmed and draft levels
+    User->>Settings: Drag volume control
+    Settings->>Store: publish draft and queue latest target
+    Store-->>Settings: immediate optimistic value
     Store->>Adapter: write preview target
     Adapter->>ABI: session write
     ABI->>Core: verify active identity
@@ -77,7 +78,7 @@ sequenceDiagram
     Core-->>ABI: confirmed reading or error
     ABI-->>Adapter: status and owned result
     Adapter-->>Store: confirmed reading or error
-    Store-->>Panel: confirmed value, recovered value, or unavailable state
+    Store-->>Settings: confirmed value, recovered value, or unavailable state
 ```
 
 The actor-owned session serializes hardware I/O away from the main actor. The store allows one preview in flight and retains only the newest pending target. A preview never updates `confirmedLevel`, and an older result never replaces a newer draft. A trailing or release-time read is authoritative. A mismatch triggers one exact set and readback. A failed preview or confirmation triggers one fresh recovery read. A failed refresh or recovery read clears confirmed state.
@@ -114,23 +115,48 @@ A result contains a current or accepted value, `maximum`, a nullable display C s
 
 Sources: `apps/deskhelm/src/ffi.rs`, `apps/deskhelm/macos/Sources/CDeskHelm/include/deskhelm.h`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Services/DeskHelmCore.swift`.
 
-## Native AppKit Shell
+## Native AppKit Shell And Settings
 
-`DeskHelmMacMain` runs `NSApplication` with `.accessory` activation policy. The staged bundle also sets `LSUIElement=true`, so the app is menu-bar-only and has no Dock icon. `AppDelegate` constructs one `StatusItemController` around a `VolumeStore` backed by `DeskHelmCore`.
+`DeskHelmMacMain` starts `NSApplication` with `.accessory` activation policy. The staged bundle also sets `LSUIElement=true`, so normal menu-bar operation has no Dock icon. `AppDelegate` constructs the shared `VolumeStore`, keyboard-volume controller, Accessibility and launch-at-login state owners, software updater, reusable `SettingsWindowController`, and `StatusItemController`.
 
-`StatusItemController` owns a square `NSStatusItem` and a transient `NSPanel`. The image-only status-bar button has no text title. `DeskHelmStatusIcon` configures the system `slider.vertical.3` symbol as a 15-point medium-weight template image so it reads as a compact control deck instead of a volume, display, or steering-wheel symbol. The tooltip and accessibility label identify DeskHelm's display controls.
+`StatusItemController` owns only a square `NSStatusItem` and native `NSMenu`; it no longer owns a volume panel. The image-only status-bar button has no text title. `DeskHelmStatusIcon` configures the system `slider.vertical.3` symbol as a 15-point medium-weight template image. The menu exposes Settings, update or release navigation, and Quit. The app also installs matching application-menu commands, including Command-, and Command-Q.
 
-The panel is transparent, borderless, nonactivating, floating at pop-up-menu level, and allowed across spaces/full-screen contexts. Opening it measures the hosted `VolumePanel`, positions it below or above the status button within the screen's visible frame, orders it forward without calling `NSApp.activate`, makes the panel key so its controls work, and starts a hardware refresh. `PanelHostingController` reports preferred-content-size changes so error text or other SwiftUI layout changes resize and re-anchor the visible panel; there is no fixed AppKit panel size.
+`SettingsWindowController` owns one retained titled, closable window hosting `DeskHelmSettingsView`. Presenting it dismisses the keyboard HUD, temporarily switches the app to `.regular`, refreshes system permission and login-item state, activates DeskHelm, and makes the Settings window key and main. Closing the reusable window returns to `.accessory` after other app-owned visible non-panel windows are gone. Its fixed-width, icon-only compact toolbar selects four panes and remembers the last selection in `UserDefaults`:
 
-Dismissal stays inside native window lifecycle APIs: after the panel has become key, it orders out when it later resigns key status and maps Escape through `cancelOperation`. It does not hide merely because the accessory app deactivates. The controller intentionally installs no global mouse or keyboard event monitor for panel dismissal. This keeps click-away behavior scoped to AppKit key-window transitions rather than observing system-wide input. The separate opt-in volume-key feature is documented below. Termination orders out the panel and removes the status item.
+| Pane | Runtime ownership |
+| --- | --- |
+| Display | Hosts the shared volume control and requests a display refresh when the pane appears |
+| Volume Keys | Shows Accessibility state and controls keyboard-volume enablement |
+| General | Registers or unregisters `SMAppService.mainApp` and links to Login Items approval when required |
+| About | Shows version/update state and controls Sparkle policy when a signed appcast is configured |
 
-App startup writes `StatusItemReadyPID` and a diagnostic summary to `UserDefaults` under bundle identifier `com.acgbox.deskhelm`. This lets `--verify` confirm app-owned status-item construction, not whether a notch, limited menu-bar space, or third-party menu manager makes the item visible to the user. When launched for `--verify-panel`, the app also opens the panel and publishes its phase, visibility, key-window state, nonactivating style, screen intersection, window number, position, and size; the script accepts a shown or refreshed panel only when its required window state and positive dimensions are present. [Operations](operations.md#script-modes-and-diagnostics) owns both diagnostic commands and their limits.
+The controller resizes from the top edge for pane-specific content and respects Reduce Motion for animated resizing. The Volume Keys pane can prompt for Accessibility, open the modern or fallback privacy URL, refresh trust, and expose the staged app bundle as a pointer-drag item for the Accessibility application list. The About pane disables automatic-update choices when `SUFeedURL` and a valid 32-byte base64 `SUPublicEDKey` are absent; in that source-build state, update actions open GitHub Releases rather than claiming an in-app update exists. When configured, Sparkle supports Off, Notify, and Install modes. [Operations](operations.md#native-app-build-and-run) owns how the framework and optional appcast metadata enter the staged bundle.
 
-Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DeskHelmMacMain.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/DeskHelmStatusIcon.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/StatusItemController.swift`, `script/build_and_run.sh`.
+```mermaid
+flowchart TD
+    Menu["Native status menu"] --> Settings["Reusable Settings window"]
+    Settings --> Display["Display pane"]
+    Settings --> VolumeKeys["Volume Keys pane"]
+    Settings --> General["General pane"]
+    Settings --> About["About pane"]
+    Display --> Store["Shared Volume Store"]
+    VolumeKeys --> Permission["Accessibility permission"]
+    VolumeKeys --> EventTap["Media-key event tap"]
+    General --> Login["SMAppService main app"]
+    About --> Updater{"Signed appcast configured"}
+    Updater -->|yes| Sparkle["Sparkle update policy"]
+    Updater -->|no| Releases["GitHub Releases"]
+```
 
-## SwiftUI Volume Panel
+The Settings shell connects one shared display state to permission, login, and update services without moving hardware control out of the Rust-backed store.
 
-`VolumePanel` supplies a 360-point-wide content stack plus outer padding; its intrinsic height can grow when error status appears, and the AppKit shell follows that preferred size. The shell contributes no popover chrome, shadow, or second background. On macOS 26 or later the entire content uses one public `.clear.interactive()` Liquid Glass effect shaped as a continuous rounded rectangle; macOS 14 through 25 render the same single-surface structure with `.regularMaterial`. The header identifies the supported hardware surface as `LG 39GX950B` over `USB-C · DDC/CI`, while help text exposes the display label returned by the core.
+App startup writes `StatusItemReadyPID` and a diagnostic summary to `UserDefaults` under bundle identifier `com.acgbox.deskhelm`. `--verify` confirms an image-only status item with a native menu and no owned panel; it cannot prove visual menu-bar placement. `--verify-settings` additionally opens Settings and accepts the published state only when the window is visible, key, main, on-screen, toolbar-backed, and has positive dimensions. [Operations](operations.md#script-modes-and-diagnostics) owns both diagnostic commands and their limits.
+
+Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DeskHelmMacMain.swift`, `DeskHelmStatusIcon.swift`, `StatusItemController.swift`, `SettingsWindowController.swift`, `DeskHelmSettingsView.swift`, `AccessibilityPermission.swift`, `PermissionAppDragSource.swift`, `LaunchAtLoginController.swift`, `SoftwareUpdater.swift`, and `script/build_and_run.sh`.
+
+## SwiftUI Display Settings
+
+`DisplaySettingsPane` hosts `DisplaySettingsView` in the grouped Settings form and requests a refresh when it appears. The view identifies the supported hardware surface as `LG 39GX950B` over `USB-C · DDC/CI`, while help text exposes the display label returned by the core.
 
 `VolumeStore` separates `draftLevel` from `confirmedLevel`:
 
@@ -141,22 +167,22 @@ Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DeskHelmMacMain.swift`, `a
 5. Preview results do not update `confirmedLevel`. A matching readback publishes confirmation; a mismatch triggers an exact set and readback.
 6. A failed preview or confirmation starts one fresh read. The actual reading replaces draft and confirmed state. A failed refresh or recovery read disables adjustment and leaves the error visible.
 
-The panel also exposes refresh, volume-key enablement, and quit controls, busy state, and accessibility identifiers. It shows a progress indicator only while the first display read is unresolved. Selecting refresh during preview or confirmation retains one request, disables the refresh button immediately, waits for store work to become idle, and then performs the read; further selections are ignored while that request or read is active. A direct refresh caller joins the retained task instead of starting a second hardware read. Preview writes and trailing confirmation leave the current controls stable instead of inserting and removing a spinner for every adjustment. The custom control supports pointer dragging, focusable arrow-key adjustment, and the VoiceOver adjustable action. Its track fill, thumb, rolling number, and accessibility value derive from one clamped `VolumeLevelPresentation`, so they remain synchronized while an animated draft is between integer targets. The rolling number uses fixed decimal columns; unchanged places remain still, and only a carry or borrow moves a higher place. This [panel presentation shares its scalar and animation policy with the keyboard HUD](#optional-keyboard-volume-control). It is DeskHelm's own control surface; it does not modify the disabled macOS Control Center slider or register a Core Audio output device. Those integrations would require a separate Core Audio HAL plug-in.
+The Display pane exposes refresh, busy state, and accessibility identifiers; keyboard-volume setup, update actions, and quit now belong to the Settings and native-menu shell described above. It shows a progress indicator only while the first display read is unresolved. Selecting refresh during preview or confirmation retains one request, disables the refresh button immediately, waits for store work to become idle, and then performs the read; further selections are ignored while that request or read is active. A direct refresh caller joins the retained task instead of starting a second hardware read. Preview writes and trailing confirmation leave the current controls stable instead of inserting and removing a spinner for every adjustment. The custom control supports pointer dragging, focusable arrow-key adjustment, and the VoiceOver adjustable action. Its track fill, thumb, rolling number, and accessibility value derive from one clamped `VolumeLevelPresentation`, so they remain synchronized while an animated draft is between integer targets. The rolling number uses fixed decimal columns; unchanged places remain still, and only a carry or borrow moves a higher place. This [Display presentation shares its scalar and animation policy with the keyboard HUD](#optional-keyboard-volume-control). It is DeskHelm's own control surface; it does not modify the disabled macOS Control Center slider or register a Core Audio output device. Those integrations would require a separate Core Audio HAL plug-in.
 
-Swift tests inject a `VolumeControlling` actor stub. They cover smooth draft retention and range clamping, unresolved-initial-read loading feedback, refresh-state separation, one requested refresh waiting for an active preview, a direct caller joining that request, unsupported maximum validation, successful and failed refresh, latest-target preview coalescing, automatic and release-time confirmation, return-to-confirmed behavior, refresh and stale-result races, recovery after preview or confirmation failure, the pure level-animation policy, presentation-scalar clamping, and decimal-column transitions at 9, 19, 99, and 100. They do not separately prove refresh queuing during confirmation or duplicate button-request coalescing. The suite also does not exercise the custom control's pointer geometry, arrow-key or VoiceOver handling, rolling-number rendering, AppKit status icon, dismissal boundary, screen positioning, dynamic panel resizing, visual interpolation, or physical session reuse.
+Swift tests inject a `VolumeControlling` actor stub. They cover smooth draft retention and range clamping, unresolved-initial-read loading feedback, refresh-state separation, one requested refresh waiting for an active preview, a direct caller joining that request, unsupported maximum validation, successful and failed refresh, latest-target preview coalescing, automatic and release-time confirmation, return-to-confirmed behavior, refresh and stale-result races, recovery after preview or confirmation failure, the pure level-animation policy, presentation-scalar clamping, and decimal-column transitions at 9, 19, 99, and 100. They do not separately prove refresh queuing during confirmation or duplicate button-request coalescing. The suite also does not exercise the custom control's pointer geometry, arrow-key or VoiceOver handling, rolling-number rendering, AppKit status menu, Settings toolbar or focus behavior, pane resizing, visual interpolation, or physical session reuse.
 
 Sources: `apps/deskhelm/macos/Sources/DeskHelmAppCore/`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeStoreTests.swift`.
 
 ## Optional Keyboard Volume Control
 
-Keyboard control is off by default and is enabled from the panel's ellipsis menu. `VolumeKeyController` checks existing Accessibility trust and shows its own disclosure before enablement when needed. It then refreshes the shared `VolumeStore`, requests macOS Accessibility permission if needed, and installs no event tap unless a confirmed display level and trust are available. The controller persists successful enablement only after the event tap starts. Restoring that preference at launch never raises the permission prompt: missing trust leaves the feature in `permissionRequired` state.
+Keyboard control is off by default and is configured in **Settings > Volume Keys**. `AccessibilityPermission` owns trust checks, prompting, privacy-settings navigation, and refresh; the pane also offers a pointer-only drag source for adding the staged app bundle to Accessibility. The toggle asks `VolumeKeyController` to enable only after trust is granted. The controller refreshes the shared `VolumeStore` and installs no event tap unless a confirmed display level and trust are available. It persists successful enablement only after the event tap starts. Restoring that preference at launch never raises the permission prompt: missing trust leaves the feature in `permissionRequired` state.
 
 `MediaKeyMonitor` installs an active Core Graphics session event tap for `systemDefined` events only. The decoder accepts the undocumented auxiliary-control payload only for volume-up and volume-down press, repeat, and release states. For each decoded event, `DefaultAudioOutputRoute` queries Core Audio's current default output identity and enumerates matching audio endpoints. `VolumeKeyOutputRoutePolicy` permits interception only when the current device is the one unique DisplayPort endpoint whose normalized name is `LG ULTRAGEAR+` or contains `39GX950` and whose manufacturer is `GSM` or begins with `LG ELECTRONICS`. A non-target route, ambiguous match, or failed property lookup passes the event through to macOS; this event-time check also fails open during a held key if the user switches outputs. A permitted press or repeat is consumed and transferred to the main actor. Its release is consumed without another action. Unrelated system-defined events and recognized events for Mac speakers, headphones, or other displays pass through. `VolumeKeyController` owns state and DDC/CI work. DeskHelm does not subscribe to ordinary key-down/key-up events, retain input, inspect other apps, or intercept mute, but macOS Accessibility permission is broader than this allowlist.
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant Panel as Volume Panel
+    participant Settings as Volume Keys Settings
     participant VKC as Volume Key Controller
     participant AX as macOS Accessibility
     participant Tap as Media Key Monitor
@@ -165,8 +191,8 @@ sequenceDiagram
     participant Core as Rust Display Core
     participant HUD as Transient Volume HUD
 
-    User->>Panel: Enable Volume Keys
-    Panel->>VKC: toggle
+    User->>Settings: Grant access and enable volume keys
+    Settings->>VKC: set enabled
     VKC->>Store: refresh
     Store->>Core: read confirmed volume
     Core-->>Store: confirmed level or error
@@ -179,10 +205,10 @@ sequenceDiagram
     alt unique target LG DisplayPort route
         Tap->>VKC: consume permitted pressed action
         VKC->>Store: queue latest preview target
-        alt menu panel is not presented
+        alt Settings is not being presented
             VKC->>HUD: show projected level
-        else menu panel is presented
-            Store-->>Panel: animate projected draft
+        else Settings is being presented
+            Store-->>Settings: animate projected draft
         end
         Store->>Core: write preview target
         Core-->>Store: transport accepted or error
@@ -192,7 +218,7 @@ sequenceDiagram
             Store-->>VKC: confirmed level
         else permission, tap, or display failure
             VKC->>Tap: stop interception
-            opt menu panel is not presented
+            opt Settings is not being presented
                 VKC->>HUD: show error
             end
         end
@@ -201,21 +227,21 @@ sequenceDiagram
     end
 ```
 
-The diagram shows event-time route gating and the mutually exclusive menu-panel or HUD presentation paths.
+The diagram shows event-time route gating and the mutually exclusive Settings or HUD presentation paths.
 
 The opt-in path confirms hardware before installing interception, gates each decoded event on the current Core Audio output route, applies each permitted key action to the current draft, coalesces preview writes, confirms once after input stops, and fails open either by passing a non-target event through or removing the filter when it cannot safely continue.
 
-Each press or macOS system repeat changes the draft level by one point and clamps it to the display range. Holding a key therefore adjusts continuously without an app-owned repeat timer. The shared store sends the newest preview target and owns the trailing confirmation; `VolumeKeyController` does not wait for a full readback after each event. When the menu panel is not presented, `VolumeHUDController` shows the projected value in a borderless, nonactivating, mouse-ignoring status-bar-level panel for 1.25 seconds; errors remain for two seconds. Beginning menu-panel presentation dismisses an existing HUD. While the menu is visible or awaiting presentation, level updates animate its shared control and level or error HUD requests are suppressed, avoiding a second key window.
+Each press or macOS system repeat changes the draft level by one point and clamps it to the display range. Holding a key therefore adjusts continuously without an app-owned repeat timer. The shared store sends the newest preview target and owns the trailing confirmation; `VolumeKeyController` does not wait for a full readback after each event. When Settings is not being presented, `VolumeHUDController` shows the projected value in a borderless, nonactivating, mouse-ignoring status-bar-level panel for 1.25 seconds; errors remain for two seconds. Beginning Settings presentation dismisses an existing HUD. While Settings is visible or awaiting presentation, level and error HUD requests are suppressed, avoiding a second key window.
 
-`VolumeHUDController` retains one observable `VolumeHUDState` and one nonopaque SwiftUI hosting view instead of replacing its content view for every repeat. The HUD and the [open menu-panel control](#swiftui-volume-panel) animate from the same projected draft and apply matching transactions derived from the same event timestamp. Each view is `Animatable` over one `Double` level and derives its fill, thumb or speaker symbol, rounded number, and accessibility value from `VolumeLevelPresentation`. The number view maps that scalar into three fixed right-aligned decimal columns. An unchanged column renders one static digit; a changed column clips and rolls only its lower and upper digits, so 14→15 moves the ones place while 19→20 also moves the tens place. For repeated input more than 18 ms and at most 120 ms apart, a continuous linear segment lasts the full preceding event interval, eliminating dead time between one-point targets. Slower isolated visible updates use 80 ms. First HUD presentation, sub-frame updates, level/error switches, and Reduce Motion updates are immediate; the menu can animate its first visible keyboard update.
+`VolumeHUDController` retains one observable `VolumeHUDState` and one nonopaque SwiftUI hosting view instead of replacing its content view for every repeat. The HUD and the [Display Settings control](#swiftui-display-settings) derive presentation from the same projected draft and apply matching transactions derived from the same event timestamp. Each view is `Animatable` over one `Double` level and derives its fill, thumb or speaker symbol, rounded number, and accessibility value from `VolumeLevelPresentation`. The number view maps that scalar into three fixed right-aligned decimal columns. An unchanged column renders one static digit; a changed column clips and rolls only its lower and upper digits, so 14→15 moves the ones place while 19→20 also moves the tens place. For repeated input more than 18 ms and at most 120 ms apart, a continuous linear segment lasts the full preceding event interval, eliminating dead time between one-point targets. Slower isolated visible updates use 80 ms. First HUD presentation, sub-frame updates, level/error switches, and Reduce Motion updates are immediate; the Display pane can animate a visible keyboard update.
 
-On macOS 26 or later, the SwiftUI HUD content applies one public `.clear.interactive()` glass effect shaped as a capsule; macOS 14 through 25 use one regular-material capsule. The [AppKit shell](#native-appkit-shell) provides a transparent, borderless, nonactivating, mouse-ignoring panel with no second effect wrapper. It temporarily makes that panel key while visible so the clear-glass surface renders as active, but immediately clears the content first responder so a normal keyboard focus ring is not drawn. The panel never becomes main or accepts pointer input; the SwiftUI accessibility label and value remain available. The resulting appearance and focus behavior remain live UI compatibility risks and can still differ from Apple's private OSD. A new level resets the 1.25-second dismissal timer without another layout pass; dismissal fades over 160 ms unless Reduce Motion is enabled, then orders the panel out.
+On macOS 26 or later, the SwiftUI HUD content applies one public `.clear.interactive()` glass effect shaped as a capsule; macOS 14 through 25 use one regular-material capsule. The [AppKit shell](#native-appkit-shell-and-settings) provides a transparent, borderless, nonactivating, mouse-ignoring panel with no second effect wrapper. It temporarily makes that panel key while visible so the clear-glass surface renders as active, but immediately clears the content first responder so a normal keyboard focus ring is not drawn. The panel never becomes main or accepts pointer input; the SwiftUI accessibility label and value remain available. The resulting appearance and focus behavior remain live UI compatibility risks and can still differ from Apple's private OSD. A new level resets the 1.25-second dismissal timer without another layout pass; dismissal fades over 160 ms unless Reduce Motion is enabled, then orders the panel out.
 
-If the event tap is disabled, confirmed state is lost, or display communication fails, the controller removes the tap, clears the persisted request, marks the feature failed, and shows the error HUD only when the menu panel is not presented. Later media-key events then return to macOS. Decoder tests cover accepted press/system-repeat/release payloads, rejection of mute or unrelated events, and one-point clamping. Route-policy tests cover the two accepted LG names, accepted manufacturer identities, normalization, non-display transport, other LG displays, unrelated manufacturers, unknown output state, unique-current-endpoint selection, non-target press/release pass-through, and target press/release disposition. They do not validate Core Audio property lookup, live output switching, the undocumented payload against physical keyboards, Accessibility prompting, event-tap suppression, or HUD presentation end to end.
+If the event tap is disabled, confirmed state is lost, or display communication fails, the controller removes the tap, clears the persisted request, marks the feature failed, and shows the error HUD only when Settings is not being presented. Later media-key events then return to macOS. Decoder tests cover accepted press/system-repeat/release payloads, rejection of mute or unrelated events, and one-point clamping. Route-policy tests cover the two accepted LG names, accepted manufacturer identities, normalization, non-display transport, other LG displays, unrelated manufacturers, unknown output state, unique-current-endpoint selection, non-target press/release pass-through, and target press/release disposition. They do not validate Core Audio property lookup, live output switching, the undocumented payload against physical keyboards, Accessibility prompting, event-tap suppression, or HUD presentation end to end.
 
 This feature reuses the display safety boundary below and is built through [Operations](operations.md#native-app-build-and-run).
 
-Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/DefaultAudioOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/MediaKeyMonitor.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeKeyController.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeHUDController.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelAnimation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelPresentation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeKeyOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeMediaKey.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Stores/VolumeKeyFeatureState.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumeHUD.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumePanel.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelAnimationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelPresentationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeHUDStateTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeKeyOutputRouteTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeMediaKeyTests.swift`.
+Sources: `apps/deskhelm/macos/Sources/DeskHelmMac/App/AccessibilityPermission.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/PermissionAppDragSource.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeKeysSettingsPane.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/DefaultAudioOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/MediaKeyMonitor.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeKeyController.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/VolumeHUDController.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelAnimation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeLevelPresentation.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeKeyOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeMediaKey.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Stores/VolumeKeyFeatureState.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumeHUD.swift`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Views/VolumePanel.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelAnimationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeLevelPresentationTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeHUDStateTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeKeyOutputRouteTests.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeMediaKeyTests.swift`.
 
 ## Display Selection And Safety
 
@@ -243,8 +269,9 @@ This is a tested compatibility point, not a claim that every LG display or USB-C
 
 - Rust API or display policy: start in `apps/deskhelm/src/lib.rs` and `display.rs`; preserve strict selection and confirmed writes.
 - C ABI: update `ffi.rs` and `deskhelm.h` together; preserve status mapping, panic containment, and explicit result ownership.
-- Native lifecycle: start in `DeskHelmMacMain.swift` and `StatusItemController.swift`; verify accessory behavior and status-item readiness.
-- Panel state: start in `VolumeStore.swift` and `VolumePanel.swift`; add Swift tests for preview, confirmation, recovery, unavailable state, busy state, and errors.
-- Keyboard control: keep `MediaKeyMonitor.swift`, `VolumeKeyController.swift`, `VolumeMediaKey.swift`, and the HUD aligned; preserve opt-in permission disclosure, the volume-only allowlist, main-actor hardware work, and fail-open tap removal.
+- Native lifecycle and Settings: start in `DeskHelmMacMain.swift`, `StatusItemController.swift`, and `SettingsWindowController.swift`; verify accessory-to-regular activation, menu commands, reusable-window closure, toolbar selection, and status/Settings diagnostics.
+- Display state: start in `VolumeStore.swift`, `DisplaySettingsPane.swift`, and `DisplaySettingsView.swift`; add Swift tests for preview, confirmation, recovery, unavailable state, busy state, and errors.
+- Keyboard control: keep `AccessibilityPermission.swift`, `VolumeKeysSettingsPane.swift`, `MediaKeyMonitor.swift`, `VolumeKeyController.swift`, `VolumeMediaKey.swift`, and the HUD aligned; preserve explicit trust, the volume-only allowlist, main-actor hardware work, and fail-open tap removal.
+- Login or updates: keep `LaunchAtLoginController.swift`, `SoftwareUpdater.swift`, `Package.swift`, and bundle staging aligned; test configured and unconfigured updater behavior without embedding live credentials in source.
 - Hardware transport: start in `display/macos.rs`; retain packet tests and verify changes on the supported physical setup.
 - Build or validation: update `Package.swift`, `script/build_and_run.sh`, and `Makefile.toml` consistently, then follow [Operations](operations.md).
