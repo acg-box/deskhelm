@@ -2,15 +2,15 @@ import SwiftUI
 
 @MainActor
 struct AboutSettingsPane: View {
-  private let softwareUpdater: SoftwareUpdater
-  @State private var snapshot: SoftwareUpdater.Snapshot
+  @ObservedObject private var softwareUpdater: SoftwareUpdater
 
   init(softwareUpdater: SoftwareUpdater) {
-    self.softwareUpdater = softwareUpdater
-    _snapshot = State(initialValue: softwareUpdater.snapshot())
+    _softwareUpdater = ObservedObject(wrappedValue: softwareUpdater)
   }
 
   var body: some View {
+    let snapshot = softwareUpdater.snapshot()
+
     Section {
       SettingsRow(
         symbolName: "arrow.triangle.2.circlepath",
@@ -23,7 +23,6 @@ struct AboutSettingsPane: View {
             get: { snapshot.mode },
             set: { mode in
               softwareUpdater.setMode(mode)
-              refresh()
             }
           )
         ) {
@@ -51,7 +50,6 @@ struct AboutSettingsPane: View {
             : "View Releases"
         ) {
           softwareUpdater.checkForUpdates()
-          refresh()
         }
         .disabled(!snapshot.canCheckForUpdates)
         .controlSize(.small)
@@ -65,13 +63,6 @@ struct AboutSettingsPane: View {
         Link("Source Code", destination: Self.sourceURL)
       }
     }
-    .onAppear {
-      refresh()
-    }
-  }
-
-  private func refresh() {
-    snapshot = softwareUpdater.snapshot()
   }
 
   private static let sourceURL: URL = {

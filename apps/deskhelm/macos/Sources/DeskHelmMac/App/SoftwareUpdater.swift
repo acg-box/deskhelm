@@ -1,9 +1,10 @@
 import AppKit
+import Combine
 import Foundation
 @preconcurrency import Sparkle
 
 @MainActor
-final class SoftwareUpdater: NSObject, SPUUpdaterDelegate,
+final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate,
   SPUStandardUserDriverDelegate
 {
   enum Mode: String, CaseIterable, Identifiable {
@@ -51,6 +52,7 @@ final class SoftwareUpdater: NSObject, SPUUpdaterDelegate,
 
   private var updaterController: SPUStandardUpdaterController?
   private var presentationFinished: (@MainActor () -> Void)?
+  @Published private(set) var snapshotRevision: UInt = 0
 
   override init() {
     super.init()
@@ -110,6 +112,7 @@ final class SoftwareUpdater: NSObject, SPUUpdaterDelegate,
         updater.automaticallyDownloadsUpdates = true
       }
     }
+    publishSnapshotChange()
   }
 
   func checkForUpdates(_ sender: Any? = nil) {
@@ -121,11 +124,12 @@ final class SoftwareUpdater: NSObject, SPUUpdaterDelegate,
     NSApp.setActivationPolicy(.regular)
     NSRunningApplication.current.activate(options: [.activateAllWindows])
     updaterController.checkForUpdates(sender)
+    publishSnapshotChange()
   }
 
   nonisolated func standardUserDriverWillFinishUpdateSession() {
     Task { @MainActor [weak self] in
-      self?.presentationFinished?()
+      self?.finishUpdatePresentation()
     }
   }
 
@@ -134,7 +138,16 @@ final class SoftwareUpdater: NSObject, SPUUpdaterDelegate,
     didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
     error: (any Error)?
   ) {
+    finishUpdatePresentation()
+  }
+
+  private func finishUpdatePresentation() {
+    publishSnapshotChange()
     presentationFinished?()
+  }
+
+  private func publishSnapshotChange() {
+    snapshotRevision &+= 1
   }
 
   private static var hasSparkleConfiguration: Bool {

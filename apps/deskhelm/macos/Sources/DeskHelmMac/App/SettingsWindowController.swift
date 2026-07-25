@@ -111,6 +111,12 @@ final class SettingsWindowController: NSWindowController,
       name: NSApplication.didBecomeActiveNotification,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(otherWindowWillClose(_:)),
+      name: NSWindow.willCloseNotification,
+      object: nil
+    )
   }
 
   @available(*, unavailable)
@@ -242,6 +248,19 @@ final class SettingsWindowController: NSWindowController,
     )
   }
 
+  @objc
+  private func otherWindowWillClose(_ notification: Notification) {
+    guard let closingWindow = notification.object as? NSWindow,
+      closingWindow !== window
+    else {
+      return
+    }
+    Task { @MainActor [weak self] in
+      await Task.yield()
+      self?.restoreAccessoryActivationIfPossible()
+    }
+  }
+
   private func refreshSystemState() {
     accessibilityPermission.refresh()
     launchAtLogin.refresh()
@@ -281,6 +300,8 @@ final class SettingsWindowController: NSWindowController,
   }
 
   private func restoreAccessoryActivationIfPossible() {
+    guard window?.isVisible != true else { return }
+
     let hasOtherVisibleWindow = NSApp.windows.contains { candidate in
       candidate !== window
         && candidate.isVisible
