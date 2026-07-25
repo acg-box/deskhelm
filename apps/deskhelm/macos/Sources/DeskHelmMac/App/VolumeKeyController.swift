@@ -4,22 +4,53 @@ import OSLog
 import SwiftUI
 
 @MainActor
+protocol VolumeKeyAccessibilityProviding: AnyObject {
+  var isGranted: Bool { get }
+  @discardableResult
+  func request(prompt: Bool) -> AccessibilityPermissionState
+  @discardableResult
+  func refresh() -> AccessibilityPermissionState
+}
+
+@MainActor
+protocol VolumeKeyMonitoring: AnyObject {
+  var isRunning: Bool { get }
+  func start() throws
+  func stop()
+}
+
+@MainActor
+protocol VolumeKeyHUDPresenting: AnyObject {
+  func show(level: Int, updateUptime: TimeInterval)
+  func show(error message: String)
+  func invalidate()
+}
+
+@MainActor
 final class VolumeKeyController {
+  typealias MonitorFactory = (
+    @escaping (VolumeMediaKeyAction) -> Void,
+    @escaping (String) -> Void
+  ) -> any VolumeKeyMonitoring
+
   private let logger = Logger(
     subsystem: "com.acgbox.deskhelm",
     category: "VolumeKeys"
   )
   private let store: VolumeStore
   private let state: VolumeKeyFeatureState
-  private let accessibilityPermission: AccessibilityPermission
-  private let hud: VolumeHUDController
+  private let accessibilityPermission: any VolumeKeyAccessibilityProviding
+  private let monitorFactory: MonitorFactory
+  private let hud: any VolumeKeyHUDPresenting
+  private var enableRequestState = VolumeKeyEnableRequestState()
+  private var enableTask: Task<Void, Never>?
   private var shouldPresentHUD: @MainActor () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
-  private lazy var monitor = MediaKeyMonitor(
-    onAction: { [weak self] action in
+  private lazy var monitor = monitorFactory(
+    { [weak self] action in
       self?.receive(action)
     },
-    onDisabled: { [weak self] message in
+    { [weak self] message in
       guard self?.state.isEnabled == true else { return }
       self?.fail(message)
     }
@@ -28,12 +59,17 @@ final class VolumeKeyController {
   init(
     store: VolumeStore,
     state: VolumeKeyFeatureState,
-    accessibilityPermission: AccessibilityPermission
+    accessibilityPermission: any VolumeKeyAccessibilityProviding,
+    monitorFactory: @escaping MonitorFactory = {
+      MediaKeyMonitor(onAction: $0, onDisabled: $1)
+    },
+    hud: any VolumeKeyHUDPresenting = VolumeHUDController()
   ) {
     self.store = store
     self.state = state
     self.accessibilityPermission = accessibilityPermission
-    self.hud = VolumeHUDController()
+    self.monitorFactory = monitorFactory
+    self.hud = hud
     store.communicationFailureHandler = { [weak self] message in
       guard self?.state.isEnabled == true else { return }
       self?.fail(message)
@@ -46,9 +82,7 @@ final class VolumeKeyController {
       return
     }
 
-    Task { @MainActor [weak self] in
-      await self?.enable(requestPermission: false)
-    }
+    requestEnable(requestPermission: false)
   }
 
   func setEnabled(_ isEnabled: Bool) {
@@ -57,9 +91,7 @@ final class VolumeKeyController {
       return
     }
 
-    Task { @MainActor [weak self] in
-      await self?.enable(requestPermission: true)
-    }
+    requestEnable(requestPermission: true)
   }
 
   func setHUDPresentationPolicy(
@@ -73,16 +105,43 @@ final class VolumeKeyController {
   }
 
   func invalidate() {
+    cancelPendingEnable()
     monitor.stop()
     hud.invalidate()
     lastLevelUpdateUptime = nil
     store.communicationFailureHandler = nil
   }
 
-  private func enable(requestPermission: Bool) async {
-    state.update(to: .enabling)
+  private func requestEnable(requestPermission: Bool) {
+    guard
+      !enableRequestState.hasActiveRequest,
+      !monitor.isRunning,
+      !state.isEnabled
+    else {
+      return
+    }
 
-    guard await ensureDisplayIsReady() else {
+    state.update(to: .enabling)
+    let token = enableRequestState.begin()
+    enableTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await enable(
+        requestPermission: requestPermission,
+        token: token
+      )
+      guard enableRequestState.finish(token) else { return }
+      enableTask = nil
+    }
+  }
+
+  private func enable(
+    requestPermission: Bool,
+    token: VolumeKeyEnableRequestState.Token
+  ) async {
+    let displayIsReady = await ensureDisplayIsReady()
+    guard isCurrentEnable(token) else { return }
+
+    guard displayIsReady else {
       let message =
         store.errorMessage
         ?? "DeskHelm could not read the display before enabling volume keys."
@@ -94,14 +153,20 @@ final class VolumeKeyController {
       accessibilityPermission.request(prompt: true)
     }
 
+    guard isCurrentEnable(token) else { return }
     guard accessibilityPermission.refresh() == .granted else {
       UserDefaults.standard.set(false, forKey: Self.preferenceKey)
       state.update(to: .permissionRequired)
       return
     }
 
+    guard isCurrentEnable(token) else { return }
     do {
       try monitor.start()
+      guard isCurrentEnable(token) else {
+        monitor.stop()
+        return
+      }
       UserDefaults.standard.set(true, forKey: Self.preferenceKey)
       state.update(to: .enabled)
       logger.notice("Keyboard volume control enabled.")
@@ -111,12 +176,25 @@ final class VolumeKeyController {
   }
 
   private func disable() {
+    cancelPendingEnable()
     monitor.stop()
     hud.invalidate()
     lastLevelUpdateUptime = nil
     UserDefaults.standard.set(false, forKey: Self.preferenceKey)
     state.update(to: .disabled)
     logger.notice("Keyboard volume control disabled.")
+  }
+
+  private func cancelPendingEnable() {
+    enableRequestState.cancel()
+    enableTask?.cancel()
+    enableTask = nil
+  }
+
+  private func isCurrentEnable(
+    _ token: VolumeKeyEnableRequestState.Token
+  ) -> Bool {
+    enableRequestState.isCurrent(token) && !Task.isCancelled
   }
 
   private func ensureDisplayIsReady() async -> Bool {
@@ -168,6 +246,7 @@ final class VolumeKeyController {
   }
 
   private func fail(_ message: String) {
+    cancelPendingEnable()
     monitor.stop()
     lastLevelUpdateUptime = nil
     UserDefaults.standard.set(false, forKey: Self.preferenceKey)
@@ -180,3 +259,7 @@ final class VolumeKeyController {
 
   private static let preferenceKey = "VolumeKeysRequested"
 }
+
+extension AccessibilityPermission: VolumeKeyAccessibilityProviding {}
+extension MediaKeyMonitor: VolumeKeyMonitoring {}
+extension VolumeHUDController: VolumeKeyHUDPresenting {}
