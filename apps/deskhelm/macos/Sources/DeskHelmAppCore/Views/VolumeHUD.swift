@@ -38,6 +38,8 @@ public struct VolumeHUD: View {
   @ViewBuilder
   public var body: some View {
     singleGlassSurface
+      .focusEffectDisabled()
+      .accessibilityRespondsToUserInteraction(false)
       .environment(\.appearsActive, true)
       .padding(8)
   }

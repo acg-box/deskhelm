@@ -1,6 +1,6 @@
 package enum DeskHelmLaunchAction: Equatable, Sendable {
   case restoreRequestedVolumeKeys
-  case showPanelForVerification
+  case showSettingsForVerification
 }
 
 package enum DeskHelmLaunchPlan {
@@ -11,8 +11,8 @@ package enum DeskHelmLaunchPlan {
       .restoreRequestedVolumeKeys
     ]
 
-    if arguments.contains("--verify-panel") {
-      actions.append(.showPanelForVerification)
+    if arguments.contains("--verify-settings") {
+      actions.append(.showSettingsForVerification)
     }
 
     return actions

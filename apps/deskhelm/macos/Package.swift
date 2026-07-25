@@ -29,6 +29,12 @@ let package = Package(
   products: [
     .executable(name: "DeskHelmMac", targets: ["DeskHelmMac"])
   ],
+  dependencies: [
+    .package(
+      url: "https://github.com/sparkle-project/Sparkle",
+      exact: "2.9.4"
+    )
+  ],
   targets: [
     .target(
       name: "CDeskHelm",
@@ -41,9 +47,14 @@ let package = Package(
     ),
     .executableTarget(
       name: "DeskHelmMac",
-      dependencies: ["DeskHelmAppCore"],
+      dependencies: [
+        "DeskHelmAppCore",
+        .product(name: "Sparkle", package: "Sparkle"),
+      ],
       linkerSettings: [
-        .linkedFramework("CoreAudio")
+        .linkedFramework("ApplicationServices"),
+        .linkedFramework("CoreAudio"),
+        .linkedFramework("ServiceManagement"),
       ]
     ),
     .testTarget(

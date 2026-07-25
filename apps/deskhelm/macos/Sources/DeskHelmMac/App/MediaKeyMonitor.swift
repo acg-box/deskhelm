@@ -32,12 +32,6 @@ final class MediaKeyMonitor {
     AXIsProcessTrusted()
   }
 
-  static func requestAccessibilityAccess() {
-    let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-    let options = [promptKey: true] as CFDictionary
-    _ = AXIsProcessTrustedWithOptions(options)
-  }
-
   func start() throws {
     guard eventTap == nil else { return }
     guard Self.hasAccessibilityAccess else {
@@ -106,7 +100,7 @@ final class MediaKeyMonitor {
   fileprivate func handleTapDisabled() {
     stop()
     onDisabled(
-      "macOS disabled keyboard volume control. Enable it again from the DeskHelm menu."
+      "macOS disabled keyboard volume control. Enable it again in DeskHelm Settings."
     )
   }
 
