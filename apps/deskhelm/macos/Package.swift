@@ -61,5 +61,20 @@ let package = Package(
       name: "DeskHelmAppCoreTests",
       dependencies: ["DeskHelmAppCore"]
     ),
+    .testTarget(
+      name: "DeskHelmMacTests",
+      dependencies: [
+        "DeskHelmMac",
+        .product(name: "Sparkle", package: "Sparkle"),
+      ],
+      linkerSettings: [
+        .unsafeFlags([
+          "-Xlinker",
+          "-rpath",
+          "-Xlinker",
+          "@loader_path/../../..",
+        ])
+      ]
+    ),
   ]
 )

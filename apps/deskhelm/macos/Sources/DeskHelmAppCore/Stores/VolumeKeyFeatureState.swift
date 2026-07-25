@@ -46,3 +46,39 @@ public final class VolumeKeyFeatureState {
     self.phase = phase
   }
 }
+
+public struct VolumeKeyEnableRequestState: Sendable {
+  public struct Token: Equatable, Sendable {
+    fileprivate let generation: UInt
+  }
+
+  private var generation: UInt = 0
+  private var activeGeneration: UInt?
+
+  public init() {}
+
+  public var hasActiveRequest: Bool {
+    activeGeneration != nil
+  }
+
+  public mutating func begin() -> Token {
+    generation &+= 1
+    activeGeneration = generation
+    return Token(generation: generation)
+  }
+
+  public func isCurrent(_ token: Token) -> Bool {
+    activeGeneration == token.generation
+  }
+
+  @discardableResult
+  public mutating func finish(_ token: Token) -> Bool {
+    guard isCurrent(token) else { return false }
+    activeGeneration = nil
+    return true
+  }
+
+  public mutating func cancel() {
+    activeGeneration = nil
+  }
+}
