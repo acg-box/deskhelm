@@ -45,8 +45,12 @@ if [[ -z "${DEVELOPER_DIR:-}" ]]; then
 	if [[ -d "/Applications/Xcode-beta.app/Contents/Developer" ]]; then
 		export DEVELOPER_DIR="/Applications/Xcode-beta.app/Contents/Developer"
 	else
-		echo "Xcode beta is required at /Applications/Xcode-beta.app." >&2
-		exit 1
+		selected_developer_directory="$(/usr/bin/xcode-select --print-path)"
+		if [[ ! -x "${selected_developer_directory}/usr/bin/xcodebuild" ]]; then
+			echo "The active developer directory does not provide full Xcode." >&2
+			exit 1
+		fi
+		export DEVELOPER_DIR="${selected_developer_directory}"
 	fi
 fi
 

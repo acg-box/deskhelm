@@ -1104,9 +1104,12 @@ def test_static_contracts() -> None:
 
 	release_workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 	language_workflow = (ROOT / ".github/workflows/language.yml").read_text(encoding="utf-8")
+	build_script = (ROOT / "script/build_and_run.sh").read_text(encoding="utf-8")
 	publisher_script = (RELEASE_DIR / "publish-github-release.sh").read_text(
 		encoding="utf-8"
 	)
+	assert "/usr/bin/xcode-select --print-path" in build_script
+	assert "Xcode beta is required" not in build_script
 	assert "workflow_dispatch" not in release_workflow
 	assert "Release Preparation" not in release_workflow
 	assert "Release Prep" not in release_workflow
