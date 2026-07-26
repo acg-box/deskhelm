@@ -10,16 +10,16 @@ final class MediaKeyMonitor {
     subsystem: "com.acgbox.deskhelm",
     category: "MediaKeys"
   )
-  private let onAction: (VolumeMediaKeyAction) -> Void
+  private let onEvent: (VolumeMediaKeyEvent, String?) -> Void
   private let onDisabled: (String) -> Void
   private var eventTap: CFMachPort?
   private var runLoopSource: CFRunLoopSource?
 
   init(
-    onAction: @escaping (VolumeMediaKeyAction) -> Void,
+    onEvent: @escaping (VolumeMediaKeyEvent, String?) -> Void,
     onDisabled: @escaping (String) -> Void
   ) {
-    self.onAction = onAction
+    self.onEvent = onEvent
     self.onDisabled = onDisabled
   }
 
@@ -90,11 +90,14 @@ final class MediaKeyMonitor {
     publishState("stopped")
   }
 
-  fileprivate func receive(_ action: VolumeMediaKeyAction) {
+  fileprivate func receive(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String?
+  ) {
     logger.debug(
-      "Received allowlisted volume action: \(String(describing: action), privacy: .public)"
+      "Observed volume event: \(String(describing: event), privacy: .public), target=\(targetDeviceUID != nil, privacy: .public)"
     )
-    onAction(action)
+    onEvent(event, targetDeviceUID)
   }
 
   fileprivate func handleTapDisabled() {
@@ -144,28 +147,68 @@ private func deskHelmMediaKeyCallback(
     let appKitEvent = NSEvent(cgEvent: event),
     let mediaKeyEvent = VolumeMediaKeyDecoder.decode(
       subtype: appKitEvent.subtype.rawValue,
-      data1: appKitEvent.data1
+      data1: appKitEvent.data1,
+      shouldInvertFeedback:
+        VolumeFeedbackModifierPolicy.shouldInvertSystemPreference(
+          for: appKitEvent.modifierFlags
+        )
     )
   else {
     return Unmanaged.passUnretained(event)
   }
 
+  let targetDeviceUID = DefaultAudioOutputRoute.currentTargetDeviceUID
   let disposition = VolumeMediaKeyRoutingPolicy.disposition(
     for: mediaKeyEvent,
-    outputMatchesTarget: DefaultAudioOutputRoute.shouldInterceptVolumeKeys
+    outputMatchesTarget: targetDeviceUID != nil
   )
 
-  guard disposition != .passThrough else {
+  switch disposition {
+  case .passThrough:
     return Unmanaged.passUnretained(event)
+  case .passThroughAndDispatch(let observedEvent):
+    deliver(
+      observedEvent,
+      targetDeviceUID: nil,
+      to: monitor
+    )
+    return Unmanaged.passUnretained(event)
+  case .consumeAndDispatch(let observedEvent):
+    deliver(
+      observedEvent,
+      targetDeviceUID: targetDeviceUID,
+      to: monitor
+    )
+    return nil
   }
+}
 
-  if case .consumeAndDispatch(let action) = disposition {
-    Task { @MainActor in
-      monitor.receive(action)
+enum VolumeFeedbackModifierPolicy {
+  static func shouldInvertSystemPreference(
+    for modifiers: NSEvent.ModifierFlags
+  ) -> Bool {
+    modifiers.contains(.shift)
+      && !modifiers.contains(.control)
+      && !modifiers.contains(.option)
+      && !modifiers.contains(.command)
+  }
+}
+
+private func deliver(
+  _ event: VolumeMediaKeyEvent,
+  targetDeviceUID: String?,
+  to monitor: MediaKeyMonitor
+) {
+  if Thread.isMainThread {
+    MainActor.assumeIsolated {
+      monitor.receive(event, targetDeviceUID: targetDeviceUID)
     }
+    return
   }
 
-  return nil
+  Task { @MainActor in
+    monitor.receive(event, targetDeviceUID: targetDeviceUID)
+  }
 }
 
 private enum MediaKeyMonitorError: LocalizedError {

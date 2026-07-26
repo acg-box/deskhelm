@@ -116,39 +116,39 @@ struct VolumeKeyOutputRouteTests {
 
   @Test("Every non-target volume-key state passes through")
   func nonTargetEventsPassThrough() {
-    let press = VolumeMediaKeyEvent(action: .increase, isPressed: true)
-    let release = VolumeMediaKeyEvent(action: .increase, isPressed: false)
+    let press = VolumeMediaKeyEvent(action: .increase, state: .pressed)
+    let release = VolumeMediaKeyEvent(action: .increase, state: .released)
 
     #expect(
       VolumeMediaKeyRoutingPolicy.disposition(
         for: press,
         outputMatchesTarget: false
-      ) == .passThrough
+      ) == .passThroughAndDispatch(press)
     )
     #expect(
       VolumeMediaKeyRoutingPolicy.disposition(
         for: release,
         outputMatchesTarget: false
-      ) == .passThrough
+      ) == .passThroughAndDispatch(release)
     )
   }
 
-  @Test("A target press dispatches, while its release is only consumed")
+  @Test("Every target volume-key state dispatches")
   func targetEventDisposition() {
-    let press = VolumeMediaKeyEvent(action: .decrease, isPressed: true)
-    let release = VolumeMediaKeyEvent(action: .decrease, isPressed: false)
+    let press = VolumeMediaKeyEvent(action: .decrease, state: .pressed)
+    let release = VolumeMediaKeyEvent(action: .decrease, state: .released)
 
     #expect(
       VolumeMediaKeyRoutingPolicy.disposition(
         for: press,
         outputMatchesTarget: true
-      ) == .consumeAndDispatch(.decrease)
+      ) == .consumeAndDispatch(press)
     )
     #expect(
       VolumeMediaKeyRoutingPolicy.disposition(
         for: release,
         outputMatchesTarget: true
-      ) == .consume
+      ) == .consumeAndDispatch(release)
     )
   }
 }

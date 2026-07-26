@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Volume media keys")
 struct VolumeMediaKeyTests {
-  @Test("Decoder accepts volume key press, system repeat, and release")
+  @Test("Decoder preserves volume key press, system repeat, release, and feedback")
   func decodeVolumeKeyStates() {
     let systemRepeatFlag = 1
 
@@ -13,21 +13,31 @@ struct VolumeMediaKeyTests {
         subtype: 8,
         data1: payload(keyCode: 0, state: 10)
       )
-        == VolumeMediaKeyEvent(action: .increase, isPressed: true)
+        == VolumeMediaKeyEvent(action: .increase, state: .pressed)
     )
     #expect(
       VolumeMediaKeyDecoder.decode(
         subtype: 8,
-        data1: payload(keyCode: 1, state: 10) | systemRepeatFlag
+        data1: payload(keyCode: 1, state: 10) | systemRepeatFlag,
+        shouldInvertFeedback: true
       )
-        == VolumeMediaKeyEvent(action: .decrease, isPressed: true)
+        == VolumeMediaKeyEvent(
+          action: .decrease,
+          state: .pressed,
+          shouldInvertFeedback: true
+        )
     )
     #expect(
       VolumeMediaKeyDecoder.decode(
         subtype: 8,
-        data1: payload(keyCode: 0, state: 11)
+        data1: payload(keyCode: 0, state: 11),
+        shouldInvertFeedback: true
       )
-        == VolumeMediaKeyEvent(action: .increase, isPressed: false)
+        == VolumeMediaKeyEvent(
+          action: .increase,
+          state: .released,
+          shouldInvertFeedback: true
+        )
     )
   }
 
@@ -50,6 +60,58 @@ struct VolumeMediaKeyTests {
         subtype: 8,
         data1: payload(keyCode: 0, state: 12)
       ) == nil
+    )
+  }
+
+  @Test("Target output consumes and dispatches the full event stream")
+  func targetOutputDisposition() {
+    let press = VolumeMediaKeyEvent(
+      action: .increase,
+      state: .pressed,
+      shouldInvertFeedback: true
+    )
+    let release = VolumeMediaKeyEvent(
+      action: .increase,
+      state: .released,
+      shouldInvertFeedback: true
+    )
+
+    #expect(
+      VolumeMediaKeyRoutingPolicy.disposition(
+        for: press,
+        outputMatchesTarget: true
+      ) == .consumeAndDispatch(press)
+    )
+    #expect(
+      VolumeMediaKeyRoutingPolicy.disposition(
+        for: release,
+        outputMatchesTarget: true
+      ) == .consumeAndDispatch(release)
+    )
+  }
+
+  @Test("Non-target output passes through and dispatches the full event stream")
+  func nonTargetOutputDisposition() {
+    let press = VolumeMediaKeyEvent(
+      action: .decrease,
+      state: .pressed
+    )
+    let release = VolumeMediaKeyEvent(
+      action: .decrease,
+      state: .released
+    )
+
+    #expect(
+      VolumeMediaKeyRoutingPolicy.disposition(
+        for: press,
+        outputMatchesTarget: false
+      ) == .passThroughAndDispatch(press)
+    )
+    #expect(
+      VolumeMediaKeyRoutingPolicy.disposition(
+        for: release,
+        outputMatchesTarget: false
+      ) == .passThroughAndDispatch(release)
     )
   }
 
