@@ -10,6 +10,36 @@ CONFIGURATION="${DESKHELM_CONFIGURATION:-debug}"
 SIGNING_IDENTITY="${DESKHELM_CODE_SIGN_IDENTITY:--}"
 SPARKLE_APPCAST_URL="${DESKHELM_SPARKLE_APPCAST_URL:-}"
 SPARKLE_PUBLIC_ED_KEY="${DESKHELM_SPARKLE_PUBLIC_ED_KEY:-}"
+APP_VERSION="${DESKHELM_APP_VERSION:-}"
+if [[ -z "${APP_VERSION}" ]]; then
+	APP_VERSION="$(
+		/usr/bin/sed -n \
+			'/^\[workspace\.package\]/,/^\[/s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)"/\1/p' \
+			"${REPO_ROOT}/Cargo.toml"
+	)"
+fi
+BUILD_VERSION="${DESKHELM_BUILD_VERSION:-${APP_VERSION}}"
+STAGE_ROOT="${DESKHELM_APP_STAGE_DIR:-${SWIFT_ROOT}/dist}"
+
+if [[ -n "${DESKHELM_APP_STAGE_DIR:-}" ]]; then
+	if [[ -z "${RUNNER_TEMP:-}" || ! -d "${RUNNER_TEMP}" ]]; then
+		echo "DESKHELM_APP_STAGE_DIR requires an existing RUNNER_TEMP." >&2
+		exit 2
+	fi
+	if ! /usr/bin/python3 - "${RUNNER_TEMP}" "${STAGE_ROOT}" <<'PY'
+import os
+import sys
+
+runner_temp = os.path.realpath(sys.argv[1])
+stage_root = os.path.realpath(sys.argv[2])
+if stage_root == runner_temp or os.path.commonpath((runner_temp, stage_root)) != runner_temp:
+    raise SystemExit(1)
+PY
+	then
+		echo "DESKHELM_APP_STAGE_DIR must be a child of RUNNER_TEMP." >&2
+		exit 2
+	fi
+fi
 
 if [[ -z "${DEVELOPER_DIR:-}" ]]; then
 	if [[ -d "/Applications/Xcode-beta.app/Contents/Developer" ]]; then
@@ -71,6 +101,15 @@ case "${CONFIGURATION}" in
 		exit 2
 		;;
 esac
+
+if [[ ! "${APP_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+	echo "DESKHELM_APP_VERSION must be a stable semantic version." >&2
+	exit 2
+fi
+if [[ ! "${BUILD_VERSION}" =~ ^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){0,2}$ ]]; then
+	echo "DESKHELM_BUILD_VERSION must contain one to three integer components." >&2
+	exit 2
+fi
 
 if [[ -n "${SPARKLE_APPCAST_URL}" || -n "${SPARKLE_PUBLIC_ED_KEY}" ]] \
 	&& [[ -z "${SPARKLE_APPCAST_URL}" || -z "${SPARKLE_PUBLIC_ED_KEY}" ]]; then
@@ -160,7 +199,7 @@ sanitize_staged_rpaths() {
 stage_app_bundle() {
 	local binary_directory
 	local executable
-	local app_directory="${SWIFT_ROOT}/dist/DeskHelm.app"
+	local app_directory="${STAGE_ROOT}/DeskHelm.app"
 	local contents_directory="${app_directory}/Contents"
 	local macos_directory="${contents_directory}/MacOS"
 	local frameworks_directory="${contents_directory}/Frameworks"
@@ -175,22 +214,39 @@ stage_app_bundle() {
 		exit 1
 	fi
 
+	/usr/bin/install -d "${STAGE_ROOT}"
 	/bin/rm -rf "${app_directory}"
 	/usr/bin/install -d "${macos_directory}" "${frameworks_directory}"
 	/usr/bin/ditto "${executable}" "${macos_directory}/DeskHelmMac"
 
-	sparkle_framework="$(
-		/usr/bin/find "${SWIFT_ROOT}/.build/artifacts" \
-			-type d \
-			-name Sparkle.framework \
-			-print \
-			-quit 2>/dev/null \
-			|| true
-	)"
-	if [[ -z "${sparkle_framework}" ]]; then
-		echo "SwiftPM did not resolve Sparkle.framework." >&2
+	sparkle_framework="${binary_directory}/Sparkle.framework"
+	if [[ ! -d "${sparkle_framework}" ]]; then
+		echo "SwiftPM did not place Sparkle.framework in ${binary_directory}." >&2
 		exit 1
 	fi
+	/usr/bin/python3 - "${SWIFT_ROOT}/Package.resolved" "${sparkle_framework}" <<'PY'
+import json
+import plistlib
+import sys
+from pathlib import Path
+
+resolved_path = Path(sys.argv[1])
+framework = Path(sys.argv[2])
+resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
+versions = [
+    pin.get("state", {}).get("version")
+    for pin in resolved.get("pins", [])
+    if pin.get("identity") == "sparkle"
+]
+if versions != ["2.9.4"]:
+    raise SystemExit("Package.resolved must contain the exact Sparkle 2.9.4 pin")
+with (framework / "Versions/Current/Resources/Info.plist").open("rb") as handle:
+    actual = plistlib.load(handle).get("CFBundleShortVersionString")
+if actual != versions[0]:
+    raise SystemExit(
+        f"selected Sparkle.framework version {actual!r} does not match lock {versions[0]}"
+    )
+PY
 	/usr/bin/ditto \
 		"${sparkle_framework}" \
 		"${frameworks_directory}/Sparkle.framework"
@@ -211,8 +267,8 @@ stage_app_bundle() {
 	/usr/bin/plutil -insert CFBundleInfoDictionaryVersion -string "6.0" "${info_plist}"
 	/usr/bin/plutil -insert CFBundleName -string "DeskHelm" "${info_plist}"
 	/usr/bin/plutil -insert CFBundlePackageType -string "APPL" "${info_plist}"
-	/usr/bin/plutil -insert CFBundleShortVersionString -string "0.1.0" "${info_plist}"
-	/usr/bin/plutil -insert CFBundleVersion -string "1" "${info_plist}"
+	/usr/bin/plutil -insert CFBundleShortVersionString -string "${APP_VERSION}" "${info_plist}"
+	/usr/bin/plutil -insert CFBundleVersion -string "${BUILD_VERSION}" "${info_plist}"
 	/usr/bin/plutil -insert LSMinimumSystemVersion \
 		-string "${DESKHELM_MACOS_MINIMUM_VERSION}" \
 		"${info_plist}"
@@ -232,18 +288,10 @@ stage_app_bundle() {
 		/usr/bin/plutil -insert SUScheduledCheckInterval -integer 86400 "${info_plist}"
 	fi
 
-	/usr/bin/codesign \
-		--force \
-		--deep \
-		--sign "${SIGNING_IDENTITY}" \
-		--timestamp=none \
-		"${frameworks_directory}/Sparkle.framework"
-	/usr/bin/codesign \
-		--force \
-		--deep \
-		--sign "${SIGNING_IDENTITY}" \
-		--timestamp=none \
-		"${app_directory}"
+	"${SCRIPT_DIR}/release/sign-macos-app.sh" \
+		--app "${app_directory}" \
+		--identity "${SIGNING_IDENTITY}" \
+		--mode development
 	/usr/bin/codesign --verify --deep --strict "${app_directory}"
 	/usr/bin/otool -L "${macos_directory}/DeskHelmMac" \
 		| /usr/bin/grep -q 'Sparkle.framework'

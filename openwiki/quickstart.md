@@ -1,7 +1,7 @@
 ---
 type: Getting Started Guide
 title: DeskHelm Quickstart
-description: Introduces the DeskHelm native macOS status-menu app, four-pane Settings workflow, shared Rust CLI, supported LG 39GX950B USB-C hardware path, and validation commands.
+description: Introduces the DeskHelm native macOS status-menu app, signed Apple Silicon distribution, four-pane Settings workflow, shared Rust CLI, supported LG 39GX950B USB-C hardware path, and validation commands.
 tags: [deskhelm, quickstart, macos, ddc-ci]
 ---
 
@@ -14,6 +14,10 @@ DeskHelm is an early native macOS menu-bar prototype for controlling audio volum
 The Rust package lives in `apps/deskhelm/`. Its `rlib` supports the CLI and its `staticlib` exposes a narrow C ABI to the SwiftPM package under `apps/deskhelm/macos/`. The app uses an AppKit `NSStatusItem` with a native menu and a reusable Settings window whose SwiftUI panes own display control, volume-key setup, login behavior, and update preferences. [Architecture and Runtime](architecture-and-runtime.md) explains that call path and the hardware safety boundary. [Operations](operations.md) owns exact build, test, staging, launch, and diagnostic commands.
 
 Sources: `README.md`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/`, `apps/deskhelm/macos/`, `script/build_and_run.sh`.
+
+## Install A Release
+
+The release pipeline publishes `deskhelm-aarch64-apple-darwin.zip`, which contains a signed and notarized `DeskHelm.app` for Apple Silicon. DeskHelm no longer publishes Windows or Linux archives because display control is not implemented there. A distributed app uses `appcast.xml`, whose enclosure carries the Sparkle signature for the release archive; use **Settings > About > Check Now** or select an automatic update mode. Default source builds omit production update configuration and open GitHub Releases instead. [Operations](operations.md#release-pipeline) documents the release, signing, appcast, and publication contract.
 
 ## Requirements
 
@@ -77,6 +81,12 @@ npm ci --ignore-scripts
 cargo make check
 ```
 
+The aggregate also runs the credential-free release contract self-check. When changing release automation, run it directly for focused feedback:
+
+```sh
+cargo make test-release
+```
+
 On macOS, the aggregate builds the native app and runs its Swift tests in addition to Rust and TypeScript compilation, formatting, lint, vstyle, and tests. Run only the Swift tests with:
 
 ```sh
@@ -88,16 +98,16 @@ The Swift tests cover volume-state validation, refresh outcomes, one requested r
 ## Wiki Map
 
 - [Architecture and Runtime](architecture-and-runtime.md) - Rust core, C ABI, AppKit status menu and Settings shell, SwiftUI display workflow, app services, DDC/CI flow, and hardware boundary.
-- [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and CLI release packaging.
+- [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and signed/notarized macOS release packaging.
 - [Template Adoption](template-adoption.md) - completed transition from the placeholder template to DeskHelm and identity consistency checks.
 - [Knowledge Maintenance](knowledge-maintenance.md) - OpenWiki routing, claim ownership, manual regeneration, evidence rules, and historical documentation decisions.
 
 ## Repository Boundaries
 
 - `apps/deskhelm/src/` owns the Rust core, C ABI, and CLI; `apps/deskhelm/macos/` owns the SwiftPM native app.
-- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
+- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics; `script/release/` owns source validation, signing, notarization, appcast creation, artifact validation, and publication. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
 - `packages/` is reserved for reusable packages. Root `Cargo.toml` owns workspace membership and shared Rust versions.
-- `Makefile.toml` owns local validation tasks. Existing GitHub workflows continue to own CI and CLI release orchestration.
+- `Makefile.toml` owns local validation tasks. Existing GitHub workflows own language/Swift CI and Apple Silicon app release orchestration.
 - `openwiki/` is the maintained repository knowledge surface. [Knowledge Maintenance](knowledge-maintenance.md) defines how to update it without creating competing documentation or recurring automation.
 
 ## Before Changing Anything

@@ -33,8 +33,8 @@ firmware, cables, adapters, and docks can change DDC/CI compatibility.
 
 - `apps/deskhelm/` owns the shared Rust core, CLI, and C ABI.
 - `apps/deskhelm/macos/` owns the native AppKit and SwiftUI menu-bar app.
-- `script/` owns native build and diagnostic commands, while `scripts/` owns
-  repository-maintenance TypeScript programs.
+- `script/` owns native build, release, and diagnostic commands, while
+  `scripts/` owns repository-maintenance TypeScript programs.
 - `packages/` is reserved for reusable shared packages.
 - The root `Cargo.toml` owns Rust workspace metadata, profiles, and dependency
   versions.
@@ -64,14 +64,12 @@ cargo build --locked -p deskhelm
 ./script/build_and_run.sh
 ```
 
-#### Download Pre-built Binary
+#### Download DeskHelm for macOS
 
-- **macOS**
-    - Tagged releases publish the CLI through [GitHub Releases](https://github.com/acg-box/deskhelm/releases/latest). Build the native menu-bar app from source.
-- **Windows**
-    - Tagged releases publish a CLI archive, but display control is not implemented on Windows.
-- **Unix**
-    - Tagged releases publish a Linux CLI archive, but display control is not implemented on Linux.
+Stable [GitHub Releases](https://github.com/acg-box/deskhelm/releases/latest)
+provide `deskhelm-aarch64-apple-darwin.zip`. The archive contains the signed and
+notarized `DeskHelm.app` for Apple Silicon. DeskHelm does not publish Windows or
+Linux archives because display control is not implemented on those platforms.
 
 ### Configuration
 
@@ -141,7 +139,11 @@ Confirm native menu construction, or also open and validate Settings:
 
 ### Update
 
-Pull the latest `main` branch and rebuild the selected interface:
+A distributed app uses its signed Sparkle feed. Open **Settings > About** and
+select **Check Now**, or choose an automatic update mode. A source build has no
+production update key and opens GitHub Releases instead.
+
+To update a source build, pull `main` and rebuild:
 
 ```sh
 git pull --ff-only
@@ -169,6 +171,36 @@ Run the complete Rust, Swift, TypeScript, and TOML validation gate:
 ```sh
 cargo make check
 ```
+
+Run the credential-free release contract checks separately when changing the
+release workflow:
+
+```sh
+cargo make test-release
+```
+
+### Release Maintainers
+
+The release workflow starts only for an annotated `vX.Y.Z` tag. The tag version
+must match the workspace version, and its commit must be reachable from the
+canonical `main` branch. The workflow validates on Linux, builds and notarizes
+the app on `macos-26`, then returns to Linux to validate a GitHub draft before
+it publishes the draft. It has no manual preparation or dry-run workflow.
+
+Configure the protected `release` environment before the first tag. It requires
+the public variable `DESKHELM_SPARKLE_PUBLIC_ED_KEY` and these secrets:
+
+- `DESKHELM_SPARKLE_PRIVATE_ED_KEY`
+- `APPLE_DEVELOPER_ID_APPLICATION_IDENTITY`
+- `APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64`
+- `APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD`
+- `APPLE_NOTARY_ISSUER_ID`
+- `APPLE_NOTARY_KEY_ID`
+- `APPLE_NOTARY_KEY_P8`
+
+DeskHelm must use its own Sparkle key pair. Do not reuse another application's
+private or public key. Only the final publisher receives GitHub contents write
+permission. The workflow does not publish the Rust crate.
 
 ### Architecture
 

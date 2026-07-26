@@ -23,7 +23,7 @@ The migration changed these coupled values together:
 - Private npm tooling package: the former placeholder value changed to `deskhelm-workspace`.
 - Workspace description, homepage, and repository metadata to DeskHelm and `acg-box/deskhelm`.
 - README content from placeholder/TODO guidance to the public product pitch, supported status, workspace ownership, installation, interaction, update, development, and release-download guidance.
-- Release selectors, executable paths, archive names, artifact globs, and crates.io publication target to `deskhelm`.
+- Release selectors, executable paths, archive names, and artifact globs to `deskhelm`; later release hardening narrowed distribution to the signed and notarized Apple Silicon app and removed crates.io publication.
 - Placeholder logging/build-metadata runtime to a shared Rust library, direct CLI, C ABI, and AppKit/SwiftUI menu-bar app over the Apple Silicon DDC/CI transport.
 
 The migration preserves the workspace-first ownership model: runnable code remains under `apps/`, maintenance TypeScript remains under `scripts/`, and `packages/` remains reserved for actual reuse.
@@ -36,9 +36,9 @@ That replacement changes the risk profile: product correctness now depends on co
 
 ## Release Reconciliation
 
-`.github/workflows/release.yml` now builds, packages, uploads, and publishes `deskhelm`. The GitHub Release job still depends on all matrix builds; crates.io publication remains independent and may run concurrently. The matrix includes Linux and Windows even though hardware operations are supported only on Apple Silicon macOS, so successful cross-platform compilation does not imply functional display control.
+`.github/workflows/release.yml` now validates an annotated stable tag against canonical `main`, builds and notarizes `DeskHelm.app` on Apple Silicon, signs the release archive for its Sparkle appcast, validates a private GitHub draft, and then publishes the three macOS release assets. Linux/Windows CLI archives and crates.io publication are no longer part of the release.
 
-Any future package rename must update the app directory and manifest, root metadata and lockfiles, README commands, workflow package selectors, executable/archive names, crates.io target, and owning OpenWiki pages as one change. See [Operations](operations.md#release-pipeline) for the current exact flow.
+Any future package rename must update the app directory and manifest, root metadata and lockfiles, README commands, workflow and release-script selectors, executable/archive/appcast names, and owning OpenWiki pages as one change. See [Operations](operations.md#release-pipeline) for the current exact flow.
 
 ## Residual Identity Checks
 
