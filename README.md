@@ -88,6 +88,14 @@ headphones and Mac speakers, keep normal system volume-key behavior. Set
 `DESKHELM_CODE_SIGN_IDENTITY` to an authorized Apple Development identity when
 Accessibility authorization must persist across rebuilds.
 
+DeskHelm follows the macOS **Play feedback when volume is changed** preference.
+A tap plays the installed macOS volume cue through the current LG audio endpoint
+after its final DDC/CI preview write is accepted. A held key does not stack a cue
+for every system repeat: it plays once on release. At maximum volume, the cue
+starts immediately and repeats about once per second until release. Holding
+Shift alone reverses the feedback preference for that key sequence, as macOS
+does. A failed write or output-route change stays silent.
+
 Open **Settings > General** to enable launch at login. The About pane shows the
 current update configuration. A source build without a signed Sparkle appcast
 opens GitHub Releases instead of claiming that an in-app update is available.
@@ -103,6 +111,11 @@ Use the Display pane to drag the volume control, use the arrow keys, or use the
 VoiceOver adjustable action. DeskHelm coalesces rapid preview writes and
 confirms the final target through hardware readback. When keyboard volume
 control is enabled, a transient HUD shows accepted LG volume changes.
+
+Audible feedback starts after the display transport accepts the final preview
+write; the later readback remains the authoritative confirmed value. If the
+compatible macOS sound resource is not available, volume control continues
+without a cue and DeskHelm records the condition in its log.
 
 Use the CLI to read or set the display volume:
 

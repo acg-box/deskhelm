@@ -29,7 +29,7 @@ protocol VolumeKeyHUDPresenting: AnyObject {
 @MainActor
 final class VolumeKeyController {
   typealias MonitorFactory = (
-    @escaping (VolumeMediaKeyAction) -> Void,
+    @escaping (VolumeMediaKeyEvent, String?) -> Void,
     @escaping (String) -> Void
   ) -> any VolumeKeyMonitoring
 
@@ -42,13 +42,14 @@ final class VolumeKeyController {
   private let accessibilityPermission: any VolumeKeyAccessibilityProviding
   private let monitorFactory: MonitorFactory
   private let hud: any VolumeKeyHUDPresenting
+  private let feedbackCoordinator: any VolumeFeedbackCoordinating
   private var enableRequestState = VolumeKeyEnableRequestState()
   private var enableTask: Task<Void, Never>?
   private var shouldPresentHUD: @MainActor () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = monitorFactory(
-    { [weak self] action in
-      self?.receive(action)
+    { [weak self] event, targetDeviceUID in
+      self?.receive(event, targetDeviceUID: targetDeviceUID)
     },
     { [weak self] message in
       guard self?.state.isEnabled == true else { return }
@@ -61,15 +62,18 @@ final class VolumeKeyController {
     state: VolumeKeyFeatureState,
     accessibilityPermission: any VolumeKeyAccessibilityProviding,
     monitorFactory: @escaping MonitorFactory = {
-      MediaKeyMonitor(onAction: $0, onDisabled: $1)
+      MediaKeyMonitor(onEvent: $0, onDisabled: $1)
     },
-    hud: any VolumeKeyHUDPresenting = VolumeHUDController()
+    hud: any VolumeKeyHUDPresenting = VolumeHUDController(),
+    feedbackCoordinator: (any VolumeFeedbackCoordinating)? = nil
   ) {
     self.store = store
     self.state = state
     self.accessibilityPermission = accessibilityPermission
     self.monitorFactory = monitorFactory
     self.hud = hud
+    self.feedbackCoordinator =
+      feedbackCoordinator ?? VolumeFeedbackCoordinator(store: store)
     store.communicationFailureHandler = { [weak self] message in
       guard self?.state.isEnabled == true else { return }
       self?.fail(message)
@@ -106,6 +110,7 @@ final class VolumeKeyController {
 
   func invalidate() {
     cancelPendingEnable()
+    feedbackCoordinator.cancel()
     monitor.stop()
     hud.invalidate()
     lastLevelUpdateUptime = nil
@@ -177,6 +182,7 @@ final class VolumeKeyController {
 
   private func disable() {
     cancelPendingEnable()
+    feedbackCoordinator.cancel()
     monitor.stop()
     hud.invalidate()
     lastLevelUpdateUptime = nil
@@ -214,8 +220,31 @@ final class VolumeKeyController {
     return store.confirmedLevel != nil && store.errorMessage == nil
   }
 
-  private func receive(_ action: VolumeMediaKeyAction) {
+  private func receive(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String?
+  ) {
     guard state.isEnabled else { return }
+
+    guard let targetDeviceUID else {
+      feedbackCoordinator.cancel()
+      hud.invalidate()
+      lastLevelUpdateUptime = nil
+      return
+    }
+
+    switch event.state {
+    case .pressed:
+      receivePressed(event, targetDeviceUID: targetDeviceUID)
+    case .released:
+      receiveReleased(event, targetDeviceUID: targetDeviceUID)
+    }
+  }
+
+  private func receivePressed(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String
+  ) {
     guard store.confirmedLevel != nil else {
       fail("DeskHelm lost the confirmed display volume.")
       return
@@ -223,7 +252,7 @@ final class VolumeKeyController {
 
     let baseline = Int(store.draftLevel.rounded())
     let target = VolumeKeyAdjustment.target(
-      for: action,
+      for: event.action,
       current: baseline,
       maximum: store.maximumLevel
     )
@@ -243,10 +272,28 @@ final class VolumeKeyController {
     if shouldPresentHUD() {
       hud.show(level: target, updateUptime: updateUptime)
     }
+
+    feedbackCoordinator.observePress(
+      event,
+      targetDeviceUID: targetDeviceUID,
+      targetLevel: target,
+      maximumLevel: store.maximumLevel
+    )
+  }
+
+  private func receiveReleased(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String
+  ) {
+    feedbackCoordinator.observeRelease(
+      event,
+      targetDeviceUID: targetDeviceUID
+    )
   }
 
   private func fail(_ message: String) {
     cancelPendingEnable()
+    feedbackCoordinator.cancel()
     monitor.stop()
     lastLevelUpdateUptime = nil
     UserDefaults.standard.set(false, forKey: Self.preferenceKey)

@@ -4,6 +4,10 @@ import Foundation
 
 enum DefaultAudioOutputRoute {
   static var shouldInterceptVolumeKeys: Bool {
+    currentTargetDeviceUID != nil
+  }
+
+  static var currentTargetDeviceUID: String? {
     // Read the route at event time so a switch away from the display fails open
     // immediately, including during a held key's repeat sequence.
     guard
@@ -11,18 +15,25 @@ enum DefaultAudioOutputRoute {
       let defaultIdentity = identity(for: defaultDeviceID),
       VolumeKeyOutputRoutePolicy.shouldIntercept(output: defaultIdentity),
       let matchingDeviceIDs = matchingTargetDeviceIDs(),
-      let finalDefaultDeviceID = defaultOutputDeviceID()
+      let finalDefaultDeviceID = defaultOutputDeviceID(),
+      VolumeKeyOutputRoutePolicy.isUniqueCurrentTarget(
+        defaultDeviceID: finalDefaultDeviceID,
+        matchingDeviceIDs: matchingDeviceIDs
+      ),
+      let deviceUID = stringProperty(
+        kAudioDevicePropertyDeviceUID,
+        on: finalDefaultDeviceID
+      ),
+      defaultOutputDeviceID() == finalDefaultDeviceID
     else {
-      return false
+      return nil
     }
 
     // Core Audio exposes only the generic "LG ULTRAGEAR+" name for this model.
     // Do not guess which display to control when more than one endpoint matches.
-    // Read the default again after enumeration to close the route-switch window.
-    return VolumeKeyOutputRoutePolicy.isUniqueCurrentTarget(
-      defaultDeviceID: finalDefaultDeviceID,
-      matchingDeviceIDs: matchingDeviceIDs
-    )
+    // Read the default again after resolving its UID to close the route-switch
+    // window before the caller consumes an event or starts feedback playback.
+    return deviceUID
   }
 
   private static func identity(

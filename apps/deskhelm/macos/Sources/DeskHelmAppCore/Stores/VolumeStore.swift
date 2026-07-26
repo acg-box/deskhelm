@@ -1,6 +1,13 @@
 import Foundation
 import Observation
 
+public enum VolumePreviewAcceptance: Equatable, Sendable {
+  case accepted(level: Int)
+  case superseded
+  case cancelled
+  case unavailable(message: String?)
+}
+
 @MainActor
 @Observable
 public final class VolumeStore {
@@ -24,6 +31,9 @@ public final class VolumeStore {
   @ObservationIgnored private var confirmationGeneration: UInt = 0
   @ObservationIgnored private var activeConfirmations = 0
   @ObservationIgnored private var lastIssuedLevel: Int?
+  @ObservationIgnored private var previewAcceptanceWaiters:
+    [UUID:
+      PreviewAcceptanceWaiter] = [:]
 
   public init(controller: any VolumeControlling) {
     self.controller = controller
@@ -48,6 +58,7 @@ public final class VolumeStore {
   public func updateDraft(_ value: Double) {
     draftLevel = min(max(value, sliderRange.lowerBound), sliderRange.upperBound)
     draftRevision &+= 1
+    resolveSupersededPreviewAcceptanceWaiters()
   }
 
   public func requestRefresh() {
@@ -76,6 +87,49 @@ public final class VolumeStore {
 
     enqueuePreview(request, coalesceInitialWrite: true)
     scheduleTrailingConfirmation(for: request)
+  }
+
+  public func awaitCurrentDraftPreviewAcceptance()
+    async -> VolumePreviewAcceptance
+  {
+    guard let request = currentRequest else {
+      return .unavailable(message: errorMessage)
+    }
+
+    if pendingPreview == nil,
+      previewInFlight == nil,
+      request.level == lastIssuedLevel
+    {
+      return .accepted(level: request.level)
+    }
+
+    enqueuePreview(request, coalesceInitialWrite: false)
+
+    if pendingPreview == nil,
+      previewInFlight == nil,
+      request.level == lastIssuedLevel
+    {
+      return .accepted(level: request.level)
+    }
+
+    let waiterID = UUID()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        guard !Task.isCancelled else {
+          continuation.resume(returning: .cancelled)
+          return
+        }
+
+        previewAcceptanceWaiters[waiterID] = PreviewAcceptanceWaiter(
+          request: request,
+          continuation: continuation
+        )
+      }
+    } onCancel: {
+      Task { @MainActor [weak self] in
+        self?.cancelPreviewAcceptanceWaiter(waiterID)
+      }
+    }
   }
 
   public func refresh() async {
@@ -193,6 +247,7 @@ public final class VolumeStore {
       if activeConfirmations == 0,
         request.level == lastIssuedLevel
       {
+        resolveAcceptedPreviewWaiters(level: request.level)
         continue
       }
 
@@ -201,9 +256,14 @@ public final class VolumeStore {
         try await controller.writeVolume(to: request.level)
         previewInFlight = nil
         lastIssuedLevel = request.level
+        resolveAcceptedPreviewWaiters(level: request.level)
       } catch {
         previewInFlight = nil
         lastIssuedLevel = nil
+        resolveUnavailablePreviewWaiters(
+          level: request.level,
+          message: Self.message(for: error)
+        )
         let hasNewerIntent =
           pendingPreview != nil || request.revision != draftRevision
         if hasNewerIntent {
@@ -352,6 +412,9 @@ public final class VolumeStore {
   }
 
   private func markUnavailableAfterFailure(_ message: String) {
+    resolveAllPreviewAcceptanceWaiters(
+      with: .unavailable(message: message)
+    )
     invalidatePendingOperations()
     draftRevision &+= 1
     confirmedLevel = nil
@@ -395,6 +458,64 @@ public final class VolumeStore {
     communicationFailureHandler?(message)
   }
 
+  private func resolveAcceptedPreviewWaiters(level: Int) {
+    let currentRevision = draftRevision
+    resolvePreviewAcceptanceWaiters { waiter in
+      guard waiter.request.level == level else { return nil }
+
+      return waiter.request.revision == currentRevision
+        ? .accepted(level: level)
+        : .superseded
+    }
+  }
+
+  private func resolveUnavailablePreviewWaiters(
+    level: Int,
+    message: String
+  ) {
+    resolvePreviewAcceptanceWaiters { waiter in
+      guard waiter.request.level == level else { return nil }
+      return .unavailable(message: message)
+    }
+  }
+
+  private func resolveSupersededPreviewAcceptanceWaiters() {
+    let currentRevision = draftRevision
+    resolvePreviewAcceptanceWaiters { waiter in
+      waiter.request.revision == currentRevision ? nil : .superseded
+    }
+  }
+
+  private func resolveAllPreviewAcceptanceWaiters(
+    with result: VolumePreviewAcceptance
+  ) {
+    resolvePreviewAcceptanceWaiters { _ in result }
+  }
+
+  private func cancelPreviewAcceptanceWaiter(_ id: UUID) {
+    guard let waiter = previewAcceptanceWaiters.removeValue(forKey: id) else {
+      return
+    }
+    waiter.continuation.resume(returning: .cancelled)
+  }
+
+  private func resolvePreviewAcceptanceWaiters(
+    _ result: (PreviewAcceptanceWaiter) -> VolumePreviewAcceptance?
+  ) {
+    var resolutions: [(UUID, VolumePreviewAcceptance)] = []
+    for (id, waiter) in previewAcceptanceWaiters {
+      guard let resolution = result(waiter) else { continue }
+      resolutions.append((id, resolution))
+    }
+
+    for (id, resolution) in resolutions {
+      guard let waiter = previewAcceptanceWaiters.removeValue(forKey: id) else {
+        continue
+      }
+      waiter.continuation.resume(returning: resolution)
+    }
+  }
+
   private static func message(for error: Error) -> String {
     if let localizedError = error as? any LocalizedError,
       let description = localizedError.errorDescription
@@ -409,6 +530,11 @@ public final class VolumeStore {
 private struct PendingWrite {
   let level: Int
   let revision: UInt
+}
+
+private struct PreviewAcceptanceWaiter {
+  let request: PendingWrite
+  let continuation: CheckedContinuation<VolumePreviewAcceptance, Never>
 }
 
 private enum RecoveryOutcome {

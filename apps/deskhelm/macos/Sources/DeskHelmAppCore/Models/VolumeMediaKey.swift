@@ -5,20 +5,31 @@ public enum VolumeMediaKeyAction: Equatable, Sendable {
   case decrease
 }
 
+public enum VolumeMediaKeyState: Equatable, Sendable {
+  case pressed
+  case released
+}
+
 public struct VolumeMediaKeyEvent: Equatable, Sendable {
   public let action: VolumeMediaKeyAction
-  public let isPressed: Bool
+  public let state: VolumeMediaKeyState
+  public let shouldInvertFeedback: Bool
 
-  public init(action: VolumeMediaKeyAction, isPressed: Bool) {
+  public init(
+    action: VolumeMediaKeyAction,
+    state: VolumeMediaKeyState,
+    shouldInvertFeedback: Bool = false
+  ) {
     self.action = action
-    self.isPressed = isPressed
+    self.state = state
+    self.shouldInvertFeedback = shouldInvertFeedback
   }
 }
 
 public enum VolumeMediaKeyDisposition: Equatable, Sendable {
   case passThrough
-  case consume
-  case consumeAndDispatch(VolumeMediaKeyAction)
+  case passThroughAndDispatch(VolumeMediaKeyEvent)
+  case consumeAndDispatch(VolumeMediaKeyEvent)
 }
 
 public enum VolumeMediaKeyRoutingPolicy {
@@ -27,19 +38,18 @@ public enum VolumeMediaKeyRoutingPolicy {
     outputMatchesTarget: Bool
   ) -> VolumeMediaKeyDisposition {
     guard outputMatchesTarget else {
-      return .passThrough
+      return .passThroughAndDispatch(event)
     }
 
-    return event.isPressed
-      ? .consumeAndDispatch(event.action)
-      : .consume
+    return .consumeAndDispatch(event)
   }
 }
 
 public enum VolumeMediaKeyDecoder {
   public static func decode(
     subtype: Int16,
-    data1: Int
+    data1: Int,
+    shouldInvertFeedback: Bool = false
   ) -> VolumeMediaKeyEvent? {
     guard subtype == auxiliaryControlSubtype else { return nil }
 
@@ -59,9 +69,17 @@ public enum VolumeMediaKeyDecoder {
 
     switch keyState {
     case keyDownState:
-      return VolumeMediaKeyEvent(action: action, isPressed: true)
+      return VolumeMediaKeyEvent(
+        action: action,
+        state: .pressed,
+        shouldInvertFeedback: shouldInvertFeedback
+      )
     case keyUpState:
-      return VolumeMediaKeyEvent(action: action, isPressed: false)
+      return VolumeMediaKeyEvent(
+        action: action,
+        state: .released,
+        shouldInvertFeedback: shouldInvertFeedback
+      )
     default:
       return nil
     }

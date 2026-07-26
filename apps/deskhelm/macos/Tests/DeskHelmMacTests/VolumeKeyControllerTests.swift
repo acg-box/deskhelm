@@ -6,6 +6,84 @@ import Testing
 
 @Suite("Volume-key controller", .serialized)
 struct VolumeKeyControllerTests {
+  @Test("The controller forwards full target events and cancels off route")
+  @MainActor
+  func forwardsEventsAndCancelsOffRoute() async {
+    let defaults = UserDefaults.standard
+    let preferenceKey = "VolumeKeysRequested"
+    let originalPreference = defaults.object(forKey: preferenceKey)
+    defer {
+      if let originalPreference {
+        defaults.set(originalPreference, forKey: preferenceKey)
+      } else {
+        defaults.removeObject(forKey: preferenceKey)
+      }
+    }
+
+    defaults.set(false, forKey: preferenceKey)
+    let readGate = AsyncGate()
+    await readGate.open()
+    let display = StubVolumeController(readGate: readGate)
+    let store = VolumeStore(controller: display)
+    let state = VolumeKeyFeatureState()
+    let permission = StubAccessibilityPermission()
+    let monitor = StubMediaKeyMonitor()
+    let hud = StubVolumeHUD()
+    let feedback = StubFeedbackCoordinator()
+    let controller = VolumeKeyController(
+      store: store,
+      state: state,
+      accessibilityPermission: permission,
+      monitorFactory: { onEvent, onDisabled in
+        monitor.configure(onEvent: onEvent, onDisabled: onDisabled)
+        return monitor
+      },
+      hud: hud,
+      feedbackCoordinator: feedback
+    )
+
+    controller.setEnabled(true)
+    await waitForEnabled(state)
+
+    let press = VolumeMediaKeyEvent(
+      action: .increase,
+      state: .pressed,
+      shouldInvertFeedback: true
+    )
+    monitor.send(press, targetDeviceUID: "LG-UID")
+
+    #expect(store.draftLevel == 25)
+    #expect(hud.levels == [25])
+    #expect(
+      feedback.presses == [
+        FeedbackPress(
+          event: press,
+          deviceUID: "LG-UID",
+          targetLevel: 25,
+          maximumLevel: 100
+        )
+      ]
+    )
+
+    let release = VolumeMediaKeyEvent(
+      action: .increase,
+      state: .released,
+      shouldInvertFeedback: true
+    )
+    monitor.send(release, targetDeviceUID: "LG-UID")
+    #expect(
+      feedback.releases == [
+        FeedbackRelease(event: release, deviceUID: "LG-UID")
+      ]
+    )
+
+    monitor.send(press, targetDeviceUID: nil)
+    #expect(feedback.cancelCount == 1)
+    #expect(hud.invalidationCount == 1)
+
+    controller.invalidate()
+  }
+
   @Test("Disabling during display refresh cannot enable the monitor")
   @MainActor
   func disableCancelsRefreshCompletion() async {
@@ -71,6 +149,17 @@ struct VolumeKeyControllerTests {
       await Task.yield()
     }
     Issue.record("Timed out waiting for the canceled refresh to settle.")
+  }
+
+  @MainActor
+  private func waitForEnabled(_ state: VolumeKeyFeatureState) async {
+    for _ in 0..<500 {
+      if state.phase == .enabled {
+        return
+      }
+      await Task.yield()
+    }
+    Issue.record("Timed out waiting for volume keys to become enabled.")
   }
 }
 
@@ -147,6 +236,16 @@ private final class StubAccessibilityPermission:
 private final class StubMediaKeyMonitor: VolumeKeyMonitoring {
   private(set) var isRunning = false
   private(set) var startCount = 0
+  private var onEvent: ((VolumeMediaKeyEvent, String?) -> Void)?
+  private var onDisabled: ((String) -> Void)?
+
+  func configure(
+    onEvent: @escaping (VolumeMediaKeyEvent, String?) -> Void,
+    onDisabled: @escaping (String) -> Void
+  ) {
+    self.onEvent = onEvent
+    self.onDisabled = onDisabled
+  }
 
   func start() throws {
     startCount += 1
@@ -156,11 +255,75 @@ private final class StubMediaKeyMonitor: VolumeKeyMonitoring {
   func stop() {
     isRunning = false
   }
+
+  func send(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String?
+  ) {
+    onEvent?(event, targetDeviceUID)
+  }
 }
 
 @MainActor
 private final class StubVolumeHUD: VolumeKeyHUDPresenting {
-  func show(level: Int, updateUptime: TimeInterval) {}
+  private(set) var levels: [Int] = []
+  private(set) var invalidationCount = 0
+
+  func show(level: Int, updateUptime: TimeInterval) {
+    levels.append(level)
+  }
+
   func show(error message: String) {}
-  func invalidate() {}
+
+  func invalidate() {
+    invalidationCount += 1
+  }
+}
+
+@MainActor
+private final class StubFeedbackCoordinator: VolumeFeedbackCoordinating {
+  private(set) var presses: [FeedbackPress] = []
+  private(set) var releases: [FeedbackRelease] = []
+  private(set) var cancelCount = 0
+
+  func observePress(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String,
+    targetLevel: Int,
+    maximumLevel: Int
+  ) {
+    presses.append(
+      FeedbackPress(
+        event: event,
+        deviceUID: targetDeviceUID,
+        targetLevel: targetLevel,
+        maximumLevel: maximumLevel
+      )
+    )
+  }
+
+  func observeRelease(
+    _ event: VolumeMediaKeyEvent,
+    targetDeviceUID: String
+  ) {
+    releases.append(
+      FeedbackRelease(event: event, deviceUID: targetDeviceUID)
+    )
+  }
+
+  func cancel() {
+    cancelCount += 1
+  }
+}
+
+private struct FeedbackPress: Equatable {
+  let event: VolumeMediaKeyEvent
+  let deviceUID: String
+  let targetLevel: Int
+  let maximumLevel: Int
+}
+
+private struct FeedbackRelease: Equatable {
+  let event: VolumeMediaKeyEvent
+  let deviceUID: String
 }

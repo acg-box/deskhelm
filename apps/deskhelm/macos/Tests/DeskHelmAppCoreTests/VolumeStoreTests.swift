@@ -131,6 +131,191 @@ struct VolumeStoreTests {
     #expect(store.errorMessage == nil)
   }
 
+  @Test("Preview acceptance awaits the latest coalesced pending target")
+  @MainActor
+  func previewAcceptanceAwaitsPendingTarget() async {
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      writeResponses: [.success(())]
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    store.updateDraft(35)
+    store.queueDraftApply()
+
+    let result = await store.awaitCurrentDraftPreviewAcceptance()
+
+    #expect(result == .accepted(level: 35))
+    #expect(await controller.previewedLevels() == [35])
+    #expect(store.confirmedLevel == 24)
+    #expect(store.draftLevel == 35)
+  }
+
+  @Test("Preview acceptance joins the latest in-flight target")
+  @MainActor
+  func previewAcceptanceJoinsInFlightTarget() async {
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      writeResponses: [.success(())],
+      writeDelay: .milliseconds(40)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+
+    let result = await store.awaitCurrentDraftPreviewAcceptance()
+
+    #expect(result == .accepted(level: 25))
+    #expect(await controller.previewedLevels() == [25])
+    #expect(store.confirmedLevel == 24)
+  }
+
+  @Test("Preview acceptance awaits the latest target behind an in-flight write")
+  @MainActor
+  func previewAcceptanceAwaitsTargetBehindInFlightWrite() async {
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      writeResponses: [.success(()), .success(())],
+      writeDelay: .milliseconds(40)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+    store.updateDraft(35)
+    store.queueDraftApply()
+
+    let result = await store.awaitCurrentDraftPreviewAcceptance()
+
+    #expect(result == .accepted(level: 35))
+    #expect(await controller.previewedLevels() == [25, 35])
+    #expect(store.confirmedLevel == 24)
+    #expect(store.draftLevel == 35)
+  }
+
+  @Test("A superseded preview acceptance reports stale intent")
+  @MainActor
+  func supersededPreviewAcceptance() async {
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      writeResponses: [.success(())],
+      writeDelay: .milliseconds(40)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+    let staleAcceptance = Task { @MainActor in
+      await store.awaitCurrentDraftPreviewAcceptance()
+    }
+    await Task.yield()
+
+    store.updateDraft(35)
+
+    #expect(await staleAcceptance.value == .superseded)
+    #expect(store.confirmedLevel == 24)
+    #expect(store.draftLevel == 35)
+  }
+
+  @Test("Preview acceptance is unavailable without confirmed display state")
+  @MainActor
+  func previewAcceptanceRequiresConfirmedState() async {
+    let controller = StubVolumeController()
+    let store = VolumeStore(controller: controller)
+    store.updateDraft(25)
+
+    let result = await store.awaitCurrentDraftPreviewAcceptance()
+
+    #expect(result == .unavailable(message: nil))
+    #expect(await controller.operations().isEmpty)
+  }
+
+  @Test("Canceling preview acceptance removes its pending waiter")
+  @MainActor
+  func cancelPreviewAcceptance() async {
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      writeResponses: [.success(())],
+      writeDelay: .milliseconds(40)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+    store.updateDraft(25)
+
+    let acceptance = Task { @MainActor in
+      await store.awaitCurrentDraftPreviewAcceptance()
+    }
+    await waitForPreviewCount(1, controller: controller)
+    acceptance.cancel()
+
+    #expect(await acceptance.value == .cancelled)
+    await waitUntilIdle(store)
+    #expect(await controller.previewedLevels() == [25])
+  }
+
+  @Test("Preview acceptance exposes a transport failure")
+  @MainActor
+  func previewAcceptanceFailure() async {
+    let controller = StubVolumeController(
+      readResponses: [
+        .success(Self.reading(level: 24)),
+        .success(Self.reading(level: 24)),
+      ],
+      writeResponses: [.failure(.unavailable)]
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+    store.updateDraft(25)
+
+    let result = await store.awaitCurrentDraftPreviewAcceptance()
+    await waitForError(store)
+
+    #expect(
+      result == .unavailable(message: "DDC/CI unavailable")
+    )
+    #expect(store.confirmedLevel == 24)
+    #expect(store.errorMessage == "DDC/CI unavailable")
+  }
+
+  @Test("Accepted current preview does not duplicate an active confirmation")
+  @MainActor
+  func acceptedPreviewDuringConfirmation() async {
+    let confirmationReadGate = TestGate()
+    let controller = StubVolumeController(
+      readResponses: [
+        .success(Self.reading(level: 24)),
+        .success(Self.reading(level: 25)),
+      ],
+      writeResponses: [.success(())],
+      readGates: [1: confirmationReadGate]
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+    await waitForReadCount(2, controller: controller)
+
+    let result = await store.awaitCurrentDraftPreviewAcceptance()
+
+    #expect(result == .accepted(level: 25))
+    #expect(await controller.previewedLevels() == [25])
+    #expect(store.confirmedLevel == 24)
+
+    await confirmationReadGate.open()
+    await waitForConfirmedLevel(25, store: store)
+  }
+
   @Test("Idle confirmation accepts a matching read without an exact rewrite")
   @MainActor
   func matchingReadAvoidsRewrite() async {
