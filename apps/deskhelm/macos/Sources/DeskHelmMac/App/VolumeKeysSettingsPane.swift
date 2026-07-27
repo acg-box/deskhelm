@@ -32,7 +32,6 @@ struct VolumeKeysSettingsPane: View {
           )
         )
         .labelsHidden()
-        .disabled(state.phase == .enabling)
         .accessibilityLabel("Keyboard volume control")
       }
 

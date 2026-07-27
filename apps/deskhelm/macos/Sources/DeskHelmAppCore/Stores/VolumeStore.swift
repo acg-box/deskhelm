@@ -8,6 +8,12 @@ public enum VolumePreviewAcceptance: Equatable, Sendable {
   case unavailable(message: String?)
 }
 
+public enum VolumeRefreshResult: Equatable, Sendable {
+  case confirmed
+  case failed
+  case skipped
+}
+
 @MainActor
 @Observable
 public final class VolumeStore {
@@ -23,7 +29,8 @@ public final class VolumeStore {
   @ObservationIgnored private var draftRevision: UInt = 0
   private var isRefreshing = false
   private var isRefreshRequested = false
-  @ObservationIgnored private var refreshRequestTask: Task<Void, Never>?
+  @ObservationIgnored private var refreshRequestTask: Task<VolumeRefreshResult, Never>?
+  @ObservationIgnored private var resetBarrier: Task<Void, Never>?
   @ObservationIgnored private var pendingPreview: PendingWrite?
   @ObservationIgnored private var previewInFlight: PendingWrite?
   @ObservationIgnored private var previewWorker: Task<Void, Never>?
@@ -31,6 +38,9 @@ public final class VolumeStore {
   @ObservationIgnored private var confirmationGeneration: UInt = 0
   @ObservationIgnored private var activeConfirmations = 0
   @ObservationIgnored private var lastIssuedLevel: Int?
+  @ObservationIgnored private var connectionGeneration: UInt = 0
+  @ObservationIgnored private var isDisplayConnectionReconfiguring = false
+  @ObservationIgnored private var idleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
   @ObservationIgnored private var previewAcceptanceWaiters:
     [UUID:
       PreviewAcceptanceWaiter] = [:]
@@ -66,19 +76,17 @@ public final class VolumeStore {
 
     isRefreshRequested = true
     refreshRequestTask = Task { @MainActor [weak self] in
-      guard let self else { return }
+      guard let self else { return .skipped }
 
-      while isBusy {
-        do {
-          try await Task.sleep(for: .milliseconds(10))
-        } catch {
-          finishRefreshRequest()
-          return
-        }
+      await waitUntilIdle()
+      guard !Task.isCancelled else {
+        finishRefreshRequest()
+        return .skipped
       }
 
-      await performRefresh()
+      let result = await performRefresh()
       finishRefreshRequest()
+      return result
     }
   }
 
@@ -132,17 +140,76 @@ public final class VolumeStore {
     }
   }
 
-  public func refresh() async {
+  @discardableResult
+  public func refresh() async -> VolumeRefreshResult {
     if let refreshRequestTask {
-      await refreshRequestTask.value
-      return
+      return await refreshRequestTask.value
     }
 
-    await performRefresh()
+    return await performRefresh()
   }
 
-  private func performRefresh() async {
-    guard !isBusy else { return }
+  public func displayConnectionWillReconfigure() {
+    connectionGeneration &+= 1
+    isDisplayConnectionReconfiguring = true
+    resolveAllPreviewAcceptanceWaiters(with: .cancelled)
+    previewWorker?.cancel()
+    refreshRequestTask?.cancel()
+    invalidatePendingOperations()
+    draftRevision &+= 1
+    confirmedLevel = nil
+    errorMessage = nil
+    updateBusyState()
+
+    let precedingReset = resetBarrier
+    let controller = controller
+    resetBarrier = Task { @MainActor [weak self] in
+      if let precedingReset {
+        await precedingReset.value
+      }
+      guard let self else { return }
+
+      await waitUntilIdle()
+      await controller.resetConnection()
+    }
+  }
+
+  public func displayConnectionDidSettle() {
+    isDisplayConnectionReconfiguring = false
+  }
+
+  public func waitUntilIdle() async {
+    guard isBusy else { return }
+
+    let waiterID = UUID()
+    await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        guard !Task.isCancelled, isBusy else {
+          continuation.resume()
+          return
+        }
+        idleWaiters[waiterID] = continuation
+      }
+    } onCancel: {
+      Task { @MainActor [weak self] in
+        self?.cancelIdleWaiter(waiterID)
+      }
+    }
+  }
+
+  private func performRefresh() async -> VolumeRefreshResult {
+    let generation = connectionGeneration
+    if let resetBarrier {
+      await resetBarrier.value
+    }
+    guard
+      !Task.isCancelled,
+      generation == connectionGeneration,
+      !isDisplayConnectionReconfiguring,
+      !isBusy
+    else {
+      return .skipped
+    }
 
     trailingConfirmation?.cancel()
     trailingConfirmation = nil
@@ -158,12 +225,29 @@ public final class VolumeStore {
     }
 
     do {
+      let reading = try await controller.readVolume()
+      guard
+        !Task.isCancelled,
+        generation == connectionGeneration,
+        !isDisplayConnectionReconfiguring
+      else {
+        return .skipped
+      }
       applyConfirmed(
-        try await controller.readVolume(),
+        reading,
         updateDraft: revision == draftRevision && pendingPreview == nil
       )
+      return .confirmed
     } catch {
+      guard
+        !Task.isCancelled,
+        generation == connectionGeneration,
+        !isDisplayConnectionReconfiguring
+      else {
+        return .skipped
+      }
       markUnavailableAfterFailure(Self.message(for: error))
+      return .failed
     }
   }
 
@@ -179,11 +263,17 @@ public final class VolumeStore {
   }
 
   private var currentRequest: PendingWrite? {
-    guard confirmedLevel != nil else { return nil }
+    guard
+      confirmedLevel != nil,
+      !isDisplayConnectionReconfiguring
+    else {
+      return nil
+    }
 
     return PendingWrite(
       level: Int(draftLevel.rounded()),
-      revision: draftRevision
+      revision: draftRevision,
+      connectionGeneration: connectionGeneration
     )
   }
 
@@ -243,7 +333,12 @@ public final class VolumeStore {
     while !Task.isCancelled, let request = pendingPreview {
       pendingPreview = nil
 
-      guard confirmedLevel != nil else { return }
+      guard
+        confirmedLevel != nil,
+        request.connectionGeneration == connectionGeneration
+      else {
+        return
+      }
       if activeConfirmations == 0,
         request.level == lastIssuedLevel
       {
@@ -254,6 +349,12 @@ public final class VolumeStore {
       previewInFlight = request
       do {
         try await controller.writeVolume(to: request.level)
+        guard
+          !Task.isCancelled,
+          request.connectionGeneration == connectionGeneration
+        else {
+          return
+        }
         previewInFlight = nil
         lastIssuedLevel = request.level
         resolveAcceptedPreviewWaiters(level: request.level)
@@ -373,6 +474,7 @@ public final class VolumeStore {
   ) -> Bool {
     generation == confirmationGeneration
       && request.revision == draftRevision
+      && request.connectionGeneration == connectionGeneration
   }
 
   private func recoverAfterWriteFailure(
@@ -380,9 +482,19 @@ public final class VolumeStore {
     generation: UInt? = nil,
     message: String
   ) async -> RecoveryOutcome {
+    guard
+      !Task.isCancelled,
+      isCurrent(request, generation: generation)
+    else {
+      return .stale
+    }
+
     do {
       let reading = try await controller.readVolume()
-      guard isCurrent(request, generation: generation) else {
+      guard
+        !Task.isCancelled,
+        isCurrent(request, generation: generation)
+      else {
         return .stale
       }
 
@@ -394,7 +506,10 @@ public final class VolumeStore {
       }
       return .resolved
     } catch {
-      guard isCurrent(request, generation: generation) else {
+      guard
+        !Task.isCancelled,
+        isCurrent(request, generation: generation)
+      else {
         return .stale
       }
 
@@ -408,6 +523,7 @@ public final class VolumeStore {
     generation: UInt?
   ) -> Bool {
     request.revision == draftRevision
+      && request.connectionGeneration == connectionGeneration
       && (generation == nil || generation == confirmationGeneration)
   }
 
@@ -446,11 +562,23 @@ public final class VolumeStore {
   private func updateBusyState() {
     isBusy =
       isRefreshing || previewWorker != nil || activeConfirmations > 0
+    guard !isBusy, !idleWaiters.isEmpty else { return }
+
+    let waiters = Array(idleWaiters.values)
+    idleWaiters.removeAll()
+    for waiter in waiters {
+      waiter.resume()
+    }
   }
 
   private func finishRefreshRequest() {
     isRefreshRequested = false
     refreshRequestTask = nil
+  }
+
+  private func cancelIdleWaiter(_ id: UUID) {
+    guard let waiter = idleWaiters.removeValue(forKey: id) else { return }
+    waiter.resume()
   }
 
   private func publishFailure(_ message: String) {
@@ -530,6 +658,7 @@ public final class VolumeStore {
 private struct PendingWrite {
   let level: Int
   let revision: UInt
+  let connectionGeneration: UInt
 }
 
 private struct PreviewAcceptanceWaiter {

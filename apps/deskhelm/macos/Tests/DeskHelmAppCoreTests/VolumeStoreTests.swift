@@ -25,7 +25,7 @@ struct VolumeStoreTests {
     #expect(store.showsInitialLoadingIndicator)
 
     await readGate.open()
-    await refresh.value
+    _ = await refresh.value
 
     #expect(!store.isBusy)
     #expect(!store.isRefreshInProgress)
@@ -476,6 +476,27 @@ struct VolumeStoreTests {
     #expect(store.errorMessage == nil)
   }
 
+  @Test("A busy store reports that a refresh was skipped")
+  @MainActor
+  func busyRefreshReportsSkipped() async {
+    let controller = StubVolumeController(
+      readResponses: [.success(Self.reading(level: 24))],
+      writeResponses: [.success(())],
+      writeDelay: .milliseconds(100)
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+    store.updateDraft(25)
+    store.queueDraftApply()
+    await waitForPreviewCount(1, controller: controller)
+
+    let result = await store.refresh()
+
+    #expect(result == .skipped)
+    #expect(store.confirmedLevel == 24)
+    await waitUntilIdle(store)
+  }
+
   @Test("Returning to confirmed volume still writes the preview back")
   @MainActor
   func returnToConfirmed() async {
@@ -851,6 +872,8 @@ private actor StubVolumeController: VolumeControlling {
     setLevels.append(level)
     return try next(from: &setResponses)
   }
+
+  func resetConnection() async {}
 
   func previewedLevels() -> [Int] {
     writeLevels

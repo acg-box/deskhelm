@@ -103,7 +103,7 @@ final class MediaKeyMonitor {
   fileprivate func handleTapDisabled() {
     stop()
     onDisabled(
-      "macOS disabled keyboard volume control. Enable it again in DeskHelm Settings."
+      "macOS disabled keyboard volume control. DeskHelm will retry safely."
     )
   }
 

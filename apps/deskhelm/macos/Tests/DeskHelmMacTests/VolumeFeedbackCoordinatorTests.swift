@@ -462,6 +462,8 @@ private actor FeedbackVolumeController: VolumeControlling {
     return reading()
   }
 
+  func resetConnection() async {}
+
   func setCurrent(_ level: Int) {
     current = level
   }
