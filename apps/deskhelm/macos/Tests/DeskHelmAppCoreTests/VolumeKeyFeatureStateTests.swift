@@ -19,6 +19,10 @@ struct VolumeKeyFeatureStateTests {
     state.update(to: .enabled)
     #expect(state.isRequested)
     #expect(state.isEnabled)
+
+    state.update(to: .unavailable("Waiting for the display."))
+    #expect(state.isRequested)
+    #expect(!state.isEnabled)
   }
 
   @Test("Permission and failure states do not claim active interception")

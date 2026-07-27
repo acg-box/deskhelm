@@ -96,6 +96,13 @@ starts immediately and repeats about once per second until release. Holding
 Shift alone reverses the feedback preference for that key sequence, as macOS
 does. A failed write or output-route change stays silent.
 
+During display reconfiguration or a temporary DDC/CI failure, DeskHelm stops
+interception and cancels queued display work, so volume keys return to macOS. It
+keeps the enabled preference and discards the old display session. After the
+connection settles, it discovers the display again, uses bounded fresh reads,
+and restores interception. Turning **Keyboard Volume Control** off cancels this
+recovery, including while a recovery read is in progress.
+
 Open **Settings > General** to enable launch at login. The About pane shows the
 current update configuration. A source build without a signed Sparkle appcast
 opens GitHub Releases instead of claiming that an in-app update is available.

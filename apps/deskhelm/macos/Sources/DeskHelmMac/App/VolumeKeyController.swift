@@ -32,6 +32,9 @@ final class VolumeKeyController {
     @escaping (VolumeMediaKeyEvent, String?) -> Void,
     @escaping (String) -> Void
   ) -> any VolumeKeyMonitoring
+  typealias DisplayReconfigurationMonitorFactory = (
+    @escaping @MainActor (DisplayReconfigurationEvent) -> Void
+  ) -> any DisplayReconfigurationMonitoring
 
   private let logger = Logger(
     subsystem: "com.acgbox.deskhelm",
@@ -41,10 +44,16 @@ final class VolumeKeyController {
   private let state: VolumeKeyFeatureState
   private let accessibilityPermission: any VolumeKeyAccessibilityProviding
   private let monitorFactory: MonitorFactory
+  private let displayReconfigurationMonitorFactory: DisplayReconfigurationMonitorFactory
   private let hud: any VolumeKeyHUDPresenting
   private let feedbackCoordinator: any VolumeFeedbackCoordinating
+  private let displayReadRetryDelays: [Duration]
+  private let automaticRecoveryDelay: Duration
   private var enableRequestState = VolumeKeyEnableRequestState()
   private var enableTask: Task<Void, Never>?
+  private var recoveryTask: Task<Void, Never>?
+  private var isDisplayObservationStarted = false
+  private var shouldRequestPermissionOnNextEnable = false
   private var shouldPresentHUD: @MainActor () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = monitorFactory(
@@ -53,9 +62,13 @@ final class VolumeKeyController {
     },
     { [weak self] message in
       guard self?.state.isEnabled == true else { return }
-      self?.fail(message)
+      self?.suspendForUnavailable(message, scheduleRecovery: true)
     }
   )
+  private lazy var displayReconfigurationMonitor =
+    displayReconfigurationMonitorFactory { [weak self] event in
+      self?.receiveDisplayReconfiguration(event)
+    }
 
   init(
     store: VolumeStore,
@@ -64,19 +77,44 @@ final class VolumeKeyController {
     monitorFactory: @escaping MonitorFactory = {
       MediaKeyMonitor(onEvent: $0, onDisabled: $1)
     },
+    displayReconfigurationMonitorFactory:
+      @escaping DisplayReconfigurationMonitorFactory = {
+        DisplayReconfigurationMonitor(onEvent: $0)
+      },
     hud: any VolumeKeyHUDPresenting = VolumeHUDController(),
-    feedbackCoordinator: (any VolumeFeedbackCoordinating)? = nil
+    feedbackCoordinator: (any VolumeFeedbackCoordinating)? = nil,
+    displayReadRetryDelays: [Duration] = [
+      .zero,
+      .milliseconds(250),
+      .milliseconds(500),
+      .seconds(1),
+      .seconds(2),
+      .seconds(4),
+    ],
+    automaticRecoveryDelay: Duration = .milliseconds(750)
   ) {
     self.store = store
     self.state = state
     self.accessibilityPermission = accessibilityPermission
     self.monitorFactory = monitorFactory
+    self.displayReconfigurationMonitorFactory =
+      displayReconfigurationMonitorFactory
     self.hud = hud
     self.feedbackCoordinator =
       feedbackCoordinator ?? VolumeFeedbackCoordinator(store: store)
+    self.displayReadRetryDelays =
+      displayReadRetryDelays.isEmpty ? [.zero] : displayReadRetryDelays
+    self.automaticRecoveryDelay = automaticRecoveryDelay
     store.communicationFailureHandler = { [weak self] message in
       guard self?.state.isEnabled == true else { return }
-      self?.fail(message)
+      self?.suspendForUnavailable(message, scheduleRecovery: true)
+    }
+    do {
+      try startDisplayObservation()
+    } catch {
+      logger.error(
+        "Display reconfiguration observation was not available at startup: \(error.localizedDescription, privacy: .public)"
+      )
     }
   }
 
@@ -110,8 +148,12 @@ final class VolumeKeyController {
 
   func invalidate() {
     cancelPendingEnable()
+    cancelRecovery()
     feedbackCoordinator.cancel()
     monitor.stop()
+    displayReconfigurationMonitor.stop()
+    isDisplayObservationStarted = false
+    shouldRequestPermissionOnNextEnable = false
     hud.invalidate()
     lastLevelUpdateUptime = nil
     store.communicationFailureHandler = nil
@@ -126,23 +168,28 @@ final class VolumeKeyController {
       return
     }
 
+    do {
+      try startDisplayObservation()
+    } catch {
+      failAndDisable(error.localizedDescription)
+      return
+    }
+
+    if requestPermission {
+      shouldRequestPermissionOnNextEnable = true
+    }
+    UserDefaults.standard.set(true, forKey: Self.preferenceKey)
     state.update(to: .enabling)
     let token = enableRequestState.begin()
     enableTask = Task { @MainActor [weak self] in
       guard let self else { return }
-      await enable(
-        requestPermission: requestPermission,
-        token: token
-      )
+      await enable(token: token)
       guard enableRequestState.finish(token) else { return }
       enableTask = nil
     }
   }
 
-  private func enable(
-    requestPermission: Bool,
-    token: VolumeKeyEnableRequestState.Token
-  ) async {
+  private func enable(token: VolumeKeyEnableRequestState.Token) async {
     let displayIsReady = await ensureDisplayIsReady()
     guard isCurrentEnable(token) else { return }
 
@@ -150,16 +197,20 @@ final class VolumeKeyController {
       let message =
         store.errorMessage
         ?? "DeskHelm could not read the display before enabling volume keys."
-      fail(message)
+      suspendForUnavailable(message, scheduleRecovery: false)
       return
     }
 
-    if !accessibilityPermission.isGranted, requestPermission {
+    if !accessibilityPermission.isGranted,
+      shouldRequestPermissionOnNextEnable
+    {
       accessibilityPermission.request(prompt: true)
     }
 
     guard isCurrentEnable(token) else { return }
     guard accessibilityPermission.refresh() == .granted else {
+      cancelRecovery()
+      shouldRequestPermissionOnNextEnable = false
       UserDefaults.standard.set(false, forKey: Self.preferenceKey)
       state.update(to: .permissionRequired)
       return
@@ -174,14 +225,18 @@ final class VolumeKeyController {
       }
       UserDefaults.standard.set(true, forKey: Self.preferenceKey)
       state.update(to: .enabled)
+      shouldRequestPermissionOnNextEnable = false
+      cancelRecovery()
       logger.notice("Keyboard volume control enabled.")
     } catch {
-      fail(error.localizedDescription)
+      failAndDisable(error.localizedDescription)
     }
   }
 
   private func disable() {
     cancelPendingEnable()
+    cancelRecovery()
+    shouldRequestPermissionOnNextEnable = false
     feedbackCoordinator.cancel()
     monitor.stop()
     hud.invalidate()
@@ -204,20 +259,27 @@ final class VolumeKeyController {
   }
 
   private func ensureDisplayIsReady() async -> Bool {
-    for _ in 0..<40 {
-      guard store.isBusy else { break }
+    for delay in displayReadRetryDelays {
+      if delay != .zero {
+        do {
+          try await Task.sleep(for: delay)
+        } catch {
+          return false
+        }
+      }
 
-      do {
-        try await Task.sleep(for: .milliseconds(50))
-      } catch {
-        return false
+      await store.waitUntilIdle()
+      guard !Task.isCancelled else { return false }
+      let result = await store.refresh()
+      if result == .confirmed,
+        store.confirmedLevel != nil,
+        store.errorMessage == nil
+      {
+        return true
       }
     }
 
-    guard !store.isBusy else { return false }
-    await store.refresh()
-
-    return store.confirmedLevel != nil && store.errorMessage == nil
+    return false
   }
 
   private func receive(
@@ -246,7 +308,10 @@ final class VolumeKeyController {
     targetDeviceUID: String
   ) {
     guard store.confirmedLevel != nil else {
-      fail("DeskHelm lost the confirmed display volume.")
+      suspendForUnavailable(
+        "DeskHelm lost the confirmed display volume.",
+        scheduleRecovery: true
+      )
       return
     }
 
@@ -291,8 +356,96 @@ final class VolumeKeyController {
     )
   }
 
-  private func fail(_ message: String) {
+  private func receiveDisplayReconfiguration(
+    _ event: DisplayReconfigurationEvent
+  ) {
+    switch event {
+    case .began:
+      store.displayConnectionWillReconfigure()
+    case .settled:
+      store.displayConnectionDidSettle()
+    }
+    guard UserDefaults.standard.bool(forKey: Self.preferenceKey) else {
+      return
+    }
+
+    switch event {
+    case .began:
+      cancelRecovery()
+      hud.invalidate()
+      suspendForUnavailable(
+        "Waiting for the display connection to settle…",
+        scheduleRecovery: false,
+        showHUD: false
+      )
+    case .settled:
+      cancelPendingEnable()
+      scheduleRecovery(after: .zero)
+    }
+  }
+
+  private func suspendForUnavailable(
+    _ message: String,
+    scheduleRecovery: Bool,
+    showHUD: Bool = true
+  ) {
     cancelPendingEnable()
+    feedbackCoordinator.cancel()
+    monitor.stop()
+    lastLevelUpdateUptime = nil
+    UserDefaults.standard.set(true, forKey: Self.preferenceKey)
+    state.update(to: .unavailable(message))
+    if showHUD && shouldPresentHUD() {
+      hud.show(error: message)
+    }
+    logger.error(
+      "Keyboard volume control suspended: \(message, privacy: .public)"
+    )
+
+    if scheduleRecovery {
+      self.scheduleRecovery(after: automaticRecoveryDelay)
+    }
+  }
+
+  private func scheduleRecovery(after delay: Duration) {
+    cancelRecovery()
+    recoveryTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      if delay != .zero {
+        do {
+          try await Task.sleep(for: delay)
+        } catch {
+          return
+        }
+      }
+      guard
+        !Task.isCancelled,
+        UserDefaults.standard.bool(forKey: Self.preferenceKey)
+      else {
+        return
+      }
+
+      recoveryTask = nil
+      requestEnable(requestPermission: false)
+    }
+  }
+
+  private func cancelRecovery() {
+    recoveryTask?.cancel()
+    recoveryTask = nil
+  }
+
+  private func startDisplayObservation() throws {
+    guard !isDisplayObservationStarted else { return }
+
+    try displayReconfigurationMonitor.start()
+    isDisplayObservationStarted = true
+  }
+
+  private func failAndDisable(_ message: String) {
+    cancelPendingEnable()
+    cancelRecovery()
+    shouldRequestPermissionOnNextEnable = false
     feedbackCoordinator.cancel()
     monitor.stop()
     lastLevelUpdateUptime = nil

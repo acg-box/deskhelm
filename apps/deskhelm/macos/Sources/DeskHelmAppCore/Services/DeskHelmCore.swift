@@ -43,6 +43,10 @@ public actor DeskHelmCore: VolumeControlling {
     }
   }
 
+  public func resetConnection() async {
+    invalidateSession()
+  }
+
   private func validate(_ level: Int) throws {
     guard (0...100).contains(level) else {
       throw VolumeControlError.invalidLevel(level)
