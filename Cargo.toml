@@ -9,7 +9,7 @@ edition     = "2024"
 homepage    = "https://github.com/acg-box/deskhelm"
 license     = "GPL-3.0-only"
 repository  = "https://github.com/acg-box/deskhelm"
-version     = "0.1.0"
+version     = "0.1.1"
 
 [profile.final-release]
 inherits = "release"

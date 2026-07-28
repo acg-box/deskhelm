@@ -480,13 +480,14 @@ struct VolumeStoreTests {
   @Test("A requested refresh waits for an active preview")
   @MainActor
   func requestedRefreshWaitsForPreview() async {
+    let writeGate = TestGate()
     let controller = StubVolumeController(
       readResponses: [
         .success(Self.reading(level: 24)),
         .success(Self.reading(level: 25)),
       ],
       writeResponses: [.success(())],
-      writeDelay: .milliseconds(50)
+      writeGates: [0: writeGate]
     )
     let store = VolumeStore(controller: controller)
     await store.refresh()
@@ -500,6 +501,7 @@ struct VolumeStoreTests {
     #expect(store.isRefreshInProgress)
     #expect(await controller.readCount() == 1)
 
+    await writeGate.open()
     await waitForReadCount(2, controller: controller)
     await waitUntilRefreshCompletes(store)
 
@@ -578,12 +580,16 @@ struct VolumeStoreTests {
     await store.refresh()
 
     store.updateDraft(25)
-    store.queueDraftApply()
-    await waitForPreviewCount(1, controller: controller)
+    #expect(
+      await store.awaitCurrentDraftPreviewAcceptance()
+        == .accepted(level: 25)
+    )
 
     store.updateDraft(24)
-    store.queueDraftApply()
-    await waitForPreviewCount(2, controller: controller)
+    #expect(
+      await store.awaitCurrentDraftPreviewAcceptance()
+        == .accepted(level: 24)
+    )
     await store.applyDraft()
 
     #expect(await controller.previewedLevels() == [25, 24])
@@ -891,19 +897,22 @@ private actor StubVolumeController: VolumeControlling {
   private var operationLog: [StubOperation] = []
   private let writeDelay: Duration?
   private let readGates: [Int: TestGate]
+  private let writeGates: [Int: TestGate]
 
   init(
     readResponses: [Result<VolumeReading, StubFailure>] = [],
     writeResponses: [Result<Void, StubFailure>] = [],
     setResponses: [Result<VolumeReading, StubFailure>] = [],
     writeDelay: Duration? = nil,
-    readGates: [Int: TestGate] = [:]
+    readGates: [Int: TestGate] = [:],
+    writeGates: [Int: TestGate] = [:]
   ) {
     self.readResponses = readResponses
     self.writeResponses = writeResponses
     self.setResponses = setResponses
     self.writeDelay = writeDelay
     self.readGates = readGates
+    self.writeGates = writeGates
   }
 
   func readVolume() async throws -> VolumeReading {
@@ -922,8 +931,12 @@ private actor StubVolumeController: VolumeControlling {
   }
 
   func writeVolume(to level: Int) async throws {
+    let callIndex = writeLevels.count
     operationLog.append(.write(level))
     writeLevels.append(level)
+    if let gate = writeGates[callIndex] {
+      await gate.wait()
+    }
     if let writeDelay {
       try await Task.sleep(for: writeDelay)
     }

@@ -92,6 +92,8 @@ public final class VolumeStore {
   public func requestRefresh() {
     guard refreshRequestTask == nil, !isRefreshing else { return }
 
+    cancelTrailingConfirmation()
+    confirmationGeneration &+= 1
     isRefreshRequested = true
     refreshRequestTask = Task { @MainActor [weak self] in
       guard let self else { return .skipped }
