@@ -64,9 +64,6 @@ jobs:
       - name: Run Rust tests
         run: cargo make test-rust
 
-      - name: Run release workflow self-check
-        run: cargo make test-release
-
   toml-check:
     name: TOML check
     runs-on: ubuntu-latest
@@ -111,8 +108,18 @@ jobs:
         with:
           tool: cargo-make
 
-      - name: Install locked TypeScript tooling
-        run: npm ci --ignore-scripts
+      - name: Install pinned npm and locked TypeScript tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$GITHUB_WORKSPACE"
+          cd "$RUNNER_TEMP"
+          npm install --global --ignore-scripts --no-audit --no-fund npm@11.16.0
+          hash -r
+          test "$(node --version)" = "v$(tr -d '[:space:]' < "$workspace/.node-version")"
+          test "$(npm --version)" = "11.16.0"
+          cd "$workspace"
+          npm ci --ignore-scripts
 
       - name: Run TypeScript format check
         run: cargo make fmt-typescript-check
@@ -125,3 +132,6 @@ jobs:
 
       - name: Run TypeScript tests
         run: cargo make test-typescript
+
+      - name: Run release workflow self-check
+        run: cargo make test-release

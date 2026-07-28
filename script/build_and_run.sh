@@ -254,6 +254,8 @@ PY
 	/usr/bin/ditto \
 		"${sparkle_framework}" \
 		"${frameworks_directory}/Sparkle.framework"
+	/usr/bin/plutil -convert binary1 \
+		"${frameworks_directory}/Sparkle.framework/Versions/Current/Resources/Info.plist"
 
 	sanitize_staged_rpaths "${macos_directory}/DeskHelmMac"
 	if ! /usr/bin/otool -l "${macos_directory}/DeskHelmMac" \
@@ -263,7 +265,7 @@ PY
 			"${macos_directory}/DeskHelmMac"
 	fi
 
-	/usr/bin/plutil -create xml1 "${info_plist}"
+	/usr/bin/plutil -create binary1 "${info_plist}"
 	/usr/bin/plutil -insert CFBundleDevelopmentRegion -string "en" "${info_plist}"
 	/usr/bin/plutil -insert CFBundleDisplayName -string "DeskHelm" "${info_plist}"
 	/usr/bin/plutil -insert CFBundleExecutable -string "DeskHelmMac" "${info_plist}"

@@ -105,7 +105,7 @@ The Swift tests cover volume-state validation, refresh outcomes, one requested r
 ## Repository Boundaries
 
 - `apps/deskhelm/src/` owns the Rust display core, C ABI, and CLI; `apps/deskhelm/macos/` owns the Swift native application layer.
-- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics; `script/release/` owns source validation, signing, appcast creation, artifact validation, and publication. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
+- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics. `script/release/` owns macOS signing, appcast creation, binary-format validation, and credential-free integration fixtures. `scripts/release/` owns the Node.js-executed TypeScript source validator and GitHub publisher; other `scripts/` programs own repository maintenance.
 - `packages/` is reserved for reusable packages. Root `Cargo.toml` owns workspace membership and shared Rust versions.
 - `Makefile.toml` owns local validation tasks. Existing GitHub workflows own Linux language checks and Apple Silicon app release orchestration; local macOS checks and the release job own Swift validation.
 - `openwiki/` is the maintained repository knowledge surface. [Knowledge Maintenance](knowledge-maintenance.md) defines how to update it without creating competing documentation or recurring automation.

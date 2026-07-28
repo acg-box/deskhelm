@@ -10,9 +10,11 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import warnings
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -77,6 +79,7 @@ def git(repo: Path, *args: str) -> str:
 def test_source_validator(tmp: Path) -> None:
 	repo = tmp / "source"
 	(repo / "apps/deskhelm/macos").mkdir(parents=True)
+	(repo / ".node-version").write_text("24.18.0\n", encoding="utf-8")
 	(repo / "Cargo.toml").write_text(
 		"""\
 [workspace]
@@ -106,6 +109,7 @@ version = "1.2.3"
 		"pins": [
 			{
 				"identity": "sparkle",
+				"kind": "remoteSourceControl",
 				"location": "https://github.com/sparkle-project/Sparkle",
 				"state": {"revision": "b" * 40, "version": "2.9.4"},
 			}
@@ -125,8 +129,12 @@ version = "1.2.3"
 	tag_commit = git(repo, "rev-parse", "HEAD")
 	git(repo, "tag", "-a", "v1.2.3", "-m", "v1.2.3")
 	tag_object = git(repo, "rev-parse", "refs/tags/v1.2.3")
-	validator = RELEASE_DIR / "validate-release-source.py"
+	node = os.environ.get("DESKHELM_NODE_BIN") or shutil.which("node")
+	if node is None:
+		raise AssertionError("Node.js is required for the release source self-check")
+	validator = ROOT / "scripts/release/validate-release-source.ts"
 	base_args = [
+		node,
 		validator,
 		"--repo-root",
 		repo,
@@ -143,7 +151,21 @@ version = "1.2.3"
 	metadata = json.loads(result.stdout)
 	assert metadata["version"] == "1.2.3"
 	assert metadata["sparkle_version"] == "2.9.4"
+	assert metadata["sparkle_revision"] == "b" * 40
 	assert metadata["tag_commit"] == tag_commit
+	workflow_env = os.environ.copy()
+	workflow_env.update(
+		{
+			"GITHUB_ACTIONS": "true",
+			"GITHUB_REF": "refs/tags/v1.2.3",
+			"GITHUB_REPOSITORY": CANONICAL_REPOSITORY,
+			"GITHUB_SHA": tag_commit,
+		}
+	)
+	run(base_args, env=workflow_env)
+	mismatched_workflow_env = dict(workflow_env)
+	mismatched_workflow_env["GITHUB_REF"] = "refs/tags/v9.9.9"
+	expect_failure(base_args, env=mismatched_workflow_env)
 
 	wrong_repository_args = list(base_args)
 	wrong_repository_args[-1] = "other/deskhelm"
@@ -165,6 +187,11 @@ version = "1.2.3"
 	resolved_path.write_text(json.dumps(bad_resolved), encoding="utf-8")
 	expect_failure(base_args)
 	resolved_path.write_text(json.dumps(resolved), encoding="utf-8")
+	bad_kind = json.loads(json.dumps(resolved))
+	bad_kind["pins"][0]["kind"] = "localSourceControl"
+	resolved_path.write_text(json.dumps(bad_kind), encoding="utf-8")
+	expect_failure(base_args)
+	resolved_path.write_text(json.dumps(resolved), encoding="utf-8")
 
 	git(repo, "tag", "-d", "v1.2.3")
 	git(repo, "tag", "v1.2.3")
@@ -178,9 +205,15 @@ version = "1.2.3"
 	expect_failure(nested_args)
 
 
-def create_signing_fixture(root: Path) -> Path:
+def create_signing_fixture(
+	root: Path,
+	*,
+	version: str = "B",
+	current_target: str | None = None,
+	unknown_graph: bool = False,
+) -> Path:
 	app = root / "DeskHelm.app"
-	version_root = app / "Contents/Frameworks/Sparkle.framework/Versions/B"
+	version_root = app / f"Contents/Frameworks/Sparkle.framework/Versions/{version}"
 	(version_root / "XPCServices/Installer.xpc").mkdir(parents=True)
 	(version_root / "XPCServices/Downloader.xpc").mkdir(parents=True)
 	(version_root / "Updater.app").mkdir(parents=True)
@@ -188,7 +221,11 @@ def create_signing_fixture(root: Path) -> Path:
 	autoupdate.write_bytes(b"mach-o")
 	autoupdate.chmod(0o755)
 	(version_root / "Sparkle").write_bytes(b"mach-o")
-	(app / "Contents/Frameworks/Sparkle.framework/Versions/Current").symlink_to("B")
+	if unknown_graph:
+		(version_root / "XPCServices/Unknown.xpc").mkdir()
+	(app / "Contents/Frameworks/Sparkle.framework/Versions/Current").symlink_to(
+		current_target or version
+	)
 	return app
 
 
@@ -304,6 +341,85 @@ elif "--entitlements" in args and "-d" in args:
 		env=wrong_team_env,
 	)
 
+	for version in ("A", "B"):
+		dynamic_root = fixture_root / f"dynamic-{version}"
+		dynamic_root.mkdir()
+		dynamic_app = create_signing_fixture(dynamic_root, version=version)
+		run(
+			[
+				RELEASE_DIR / "sign-macos-app.sh",
+				"--app",
+				dynamic_app,
+				"--identity",
+				identity,
+				"--keychain",
+				keychain,
+				"--mode",
+				"release",
+			],
+			env=env,
+		)
+
+	escape_root = fixture_root / "escape"
+	escape_root.mkdir()
+	escape_app = create_signing_fixture(
+		escape_root,
+		current_target="../B",
+	)
+	expect_failure(
+		[
+			RELEASE_DIR / "sign-macos-app.sh",
+			"--app",
+			escape_app,
+			"--identity",
+			identity,
+			"--keychain",
+			keychain,
+			"--mode",
+			"release",
+		],
+		env=env,
+	)
+
+	unknown_root = fixture_root / "unknown"
+	unknown_root.mkdir()
+	unknown_app = create_signing_fixture(unknown_root, unknown_graph=True)
+	expect_failure(
+		[
+			RELEASE_DIR / "sign-macos-app.sh",
+			"--app",
+			unknown_app,
+			"--identity",
+			identity,
+			"--keychain",
+			keychain,
+			"--mode",
+			"release",
+		],
+		env=env,
+	)
+	extra_version_root = fixture_root / "extra-version"
+	extra_version_root.mkdir()
+	extra_version_app = create_signing_fixture(extra_version_root)
+	(
+		extra_version_app
+		/ "Contents/Frameworks/Sparkle.framework/Versions/A/Unexpected"
+	).mkdir(parents=True)
+	expect_failure(
+		[
+			RELEASE_DIR / "sign-macos-app.sh",
+			"--app",
+			extra_version_app,
+			"--identity",
+			identity,
+			"--keychain",
+			keychain,
+			"--mode",
+			"release",
+		],
+		env=env,
+	)
+
 
 def test_appcast(tmp: Path) -> None:
 	fixture_root = tmp / "appcast"
@@ -417,20 +533,35 @@ import Foundation
 let key = Curve25519.Signing.PrivateKey()
 print(key.rawRepresentation.base64EncodedString())
 print(key.publicKey.rawRepresentation.base64EncodedString())
+let legacySecret = Data(repeating: 0x5a, count: 64) + key.publicKey.rawRepresentation
+print(legacySecret.base64EncodedString())
 """,
 		encoding="utf-8",
 	)
 	generated = run([swift, generator]).stdout.splitlines()
-	assert len(generated) == 2
-	private_key, public_key = generated
+	assert len(generated) == 3
+	private_key, public_key, legacy_private_key = generated
 	verifier = RELEASE_DIR / "verify-sparkle-key.swift"
 	run([verifier, public_key], input_text=f"{private_key}\n")
+	run([verifier, public_key], input_text=f"{legacy_private_key}\n")
 	wrong_public_key = base64.b64encode(bytes(32)).decode("ascii")
 	expect_failure([verifier, wrong_public_key], input_text=f"{private_key}\n")
+	expect_failure([verifier, wrong_public_key], input_text=f"{legacy_private_key}\n")
+	invalid_length_key = base64.b64encode(bytes(64)).decode("ascii")
+	expect_failure([verifier, public_key], input_text=f"{invalid_length_key}\n")
 	expect_failure([verifier, "not-base64"], input_text=f"{private_key}\n")
 
 
-def write_artifact_fixture(root: Path) -> tuple[Path, Path, Path, Path, Path]:
+def write_artifact_fixture(
+	root: Path,
+	*,
+	current_version: str = "B",
+	current_target: str | None = None,
+	unknown_graph: bool = False,
+	extra_version: bool = False,
+	duplicate_member: bool = False,
+	oversized_symlink_target: bool = False,
+) -> tuple[Path, Path, Path, Path, Path]:
 	archive = root / ARCHIVE_NAME
 	appcast = root / APPCAST_NAME
 	checksum = root / CHECKSUM_NAME
@@ -452,16 +583,31 @@ def write_artifact_fixture(root: Path) -> tuple[Path, Path, Path, Path, Path]:
 			"SUAllowsAutomaticUpdates": True,
 			"SUScheduledCheckInterval": 86400,
 			"SUPublicEDKey": PUBLIC_KEY,
-		}
+		},
+		fmt=plistlib.FMT_BINARY,
 	)
 	framework_plist = plistlib.dumps(
 		{
 			"CFBundleIdentifier": "org.sparkle-project.Sparkle",
 			"CFBundleShortVersionString": "2.9.4",
-		}
+		},
+		fmt=plistlib.FMT_BINARY,
 	)
 	with zipfile.ZipFile(archive, "w") as bundle:
+		current_info = zipfile.ZipInfo(
+			"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/Current"
+		)
+		current_info.create_system = 3
+		current_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+		current_link_target = current_target or current_version
+		if oversized_symlink_target:
+			current_link_target = "B" * 257
+		bundle.writestr(current_info, current_link_target)
 		bundle.writestr("DeskHelm.app/Contents/Info.plist", main_plist)
+		if duplicate_member:
+			with warnings.catch_warnings():
+				warnings.simplefilter("ignore", UserWarning)
+				bundle.writestr("DeskHelm.app/Contents/Info.plist", main_plist)
 		bundle.writestr("DeskHelm.app/Contents/MacOS/DeskHelmMac", b"mach-o")
 		for relative_path in (
 			"Sparkle",
@@ -471,12 +617,29 @@ def write_artifact_fixture(root: Path) -> tuple[Path, Path, Path, Path, Path]:
 			"XPCServices/Downloader.xpc/Contents/Info.plist",
 		):
 			bundle.writestr(
-				"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/B/"
+				"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/"
+				+ current_version
+				+ "/"
 				+ relative_path,
 				b"fixture",
 			)
+		if unknown_graph:
+			bundle.writestr(
+				"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/"
+				+ current_version
+				+ "/XPCServices/Unknown.xpc/Contents/Info.plist",
+				b"fixture",
+			)
+		if extra_version:
+			bundle.writestr(
+				"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/"
+				"A/Unexpected",
+				b"fixture",
+			)
 		bundle.writestr(
-			"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/B/Resources/Info.plist",
+			"DeskHelm.app/Contents/Frameworks/Sparkle.framework/Versions/"
+			+ current_version
+			+ "/Resources/Info.plist",
 			framework_plist,
 		)
 
@@ -578,6 +741,53 @@ def test_artifact_validator(tmp: Path) -> None:
 		"draft",
 	]
 	run(args)
+	for name, fixture_options, should_pass in (
+		("current-a", {"current_version": "A"}, True),
+		(
+			"current-escape",
+			{"current_version": "B", "current_target": "../B"},
+			False,
+		),
+		("unknown-graph", {"unknown_graph": True}, False),
+		("extra-version", {"extra_version": True}, False),
+		("duplicate-member", {"duplicate_member": True}, False),
+		(
+			"oversized-symlink-target",
+			{"oversized_symlink_target": True},
+			False,
+		),
+	):
+		variant_root = fixture_root / name
+		variant_root.mkdir()
+		variant = write_artifact_fixture(variant_root, **fixture_options)
+		variant_args = list(args)
+		for option, path in zip(
+			("--archive", "--appcast", "--checksum", "--release-json", "--assets-json"),
+			variant,
+		):
+			variant_args[variant_args.index(option) + 1] = path
+		if should_pass:
+			run(variant_args)
+		else:
+			expect_failure(variant_args)
+	doctype_root = fixture_root / "doctype-appcast"
+	doctype_root.mkdir()
+	doctype_variant = write_artifact_fixture(doctype_root)
+	doctype_appcast = doctype_variant[1]
+	doctype_appcast.write_bytes(
+		doctype_appcast.read_bytes().replace(
+			b"?>",
+			b"?>\n<!DOCTYPE rss []>",
+			1,
+		)
+	)
+	doctype_args = list(args)
+	for option, path in zip(
+		("--archive", "--appcast", "--checksum", "--release-json", "--assets-json"),
+		doctype_variant,
+	):
+		doctype_args[doctype_args.index(option) + 1] = path
+	expect_failure(doctype_args)
 	wrong_key_args = list(args)
 	wrong_key_args[wrong_key_args.index("--sparkle-public-key") + 1] = (
 		base64.b64encode(bytes(reversed(range(32)))).decode("ascii")
@@ -608,294 +818,16 @@ def test_artifact_validator(tmp: Path) -> None:
 
 
 def test_publisher(tmp: Path) -> None:
-	fixture_root = tmp / "publisher"
-	fixture_root.mkdir()
-	public_key_file = fixture_root / "sparkle-public-ed-key.txt"
-	public_key_file.write_text(f"{PUBLIC_KEY}\n", encoding="utf-8")
-	invalid_public_key_file = fixture_root / "invalid-sparkle-public-ed-key.txt"
-	invalid_public_key_file.write_text("not-base64\n", encoding="utf-8")
-	local_archive, _, _, release_json, assets_json = write_artifact_fixture(fixture_root)
-	public_fixture_root = tmp / "publisher-public"
-	public_fixture_root.mkdir()
-	(
-		public_archive,
-		public_appcast,
-		public_checksum,
-		public_release_json,
-		public_assets_json,
-	) = write_artifact_fixture(public_fixture_root)
-	with zipfile.ZipFile(public_archive, "a") as public_bundle:
-		public_bundle.comment = b"published bytes from an earlier nondeterministic build"
-	public_appcast_tree = ET.parse(public_appcast)
-	public_enclosure = public_appcast_tree.find("./channel/item/enclosure")
-	assert public_enclosure is not None
-	public_enclosure.set("length", str(public_archive.stat().st_size))
-	public_appcast_tree.write(public_appcast, encoding="utf-8", xml_declaration=True)
-	public_archive_digest = hashlib.sha256(public_archive.read_bytes()).hexdigest()
-	public_checksum.write_text(
-		f"{public_archive_digest}  {ARCHIVE_NAME}\n", encoding="utf-8"
+	node = os.environ.get("DESKHELM_NODE_BIN") or shutil.which("node")
+	if node is None:
+		raise AssertionError("Node.js is required for the publisher self-check")
+	run(
+		[
+			node,
+			"--test",
+			ROOT / "scripts/release/publish-github-release.test.ts",
+		]
 	)
-	public_release = json.loads(public_release_json.read_text(encoding="utf-8"))
-	public_release["draft"] = False
-	public_release["html_url"] = (
-		f"https://github.com/{CANONICAL_REPOSITORY}/releases/tag/v1.2.3"
-	)
-	public_release_json.write_text(json.dumps(public_release), encoding="utf-8")
-	public_paths = {
-		path.name: path for path in (public_archive, public_appcast, public_checksum)
-	}
-	public_assets = json.loads(public_assets_json.read_text(encoding="utf-8"))
-	for asset in public_assets:
-		path = public_paths[asset["name"]]
-		asset["size"] = path.stat().st_size
-		asset["digest"] = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-		asset["browser_download_url"] = (
-			f"https://github.com/{CANONICAL_REPOSITORY}/releases/download/"
-			f"v1.2.3/{asset['name']}"
-		)
-	public_assets_json.write_text(json.dumps(public_assets), encoding="utf-8")
-	assert local_archive.read_bytes() != public_archive.read_bytes()
-	log_path = fixture_root / "gh.jsonl"
-	fake_gh = fixture_root / "gh"
-	fake_openssl = fixture_root / "openssl"
-	write_executable(
-		fake_openssl,
-		"""#!/bin/sh
-if [ "${FAKE_OPENSSL_FAIL:-0}" = "1" ]; then
-    printf '%s\n' 'fixture signature mismatch' >&2
-    exit 1
-fi
-exit 0
-""",
-	)
-	write_executable(
-		fake_gh,
-		"""#!/usr/bin/env python3
-import json
-import os
-import shutil
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-with Path(os.environ["FAKE_GH_LOG"]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(args) + "\\n")
-
-if args[:2] == ["release", "view"]:
-    state = os.environ.get("FAKE_GH_VIEW_STATE")
-    calls = [
-        json.loads(line)
-        for line in Path(os.environ["FAKE_GH_LOG"]).read_text(encoding="utf-8").splitlines()
-    ]
-    release_created = any(call[:2] == ["release", "create"] for call in calls)
-    if state in ("draft", "public") or release_created:
-        print(json.dumps({
-            "databaseId": 123,
-            "isDraft": state != "public",
-            "isPrerelease": False,
-            "tagName": "v1.2.3",
-        }))
-        raise SystemExit(0)
-    raise SystemExit(1)
-if args[:2] in (["release", "create"], ["release", "upload"]):
-    raise SystemExit(0)
-if args[:2] == ["release", "download"]:
-    destination = Path(args[args.index("--dir") + 1])
-    name = args[args.index("--pattern") + 1]
-    destination.mkdir(parents=True, exist_ok=True)
-    input_dir = os.environ["FAKE_GH_INPUT_DIR"]
-    if os.environ.get("FAKE_GH_VIEW_STATE") == "public":
-        input_dir = os.environ.get("FAKE_GH_PUBLIC_INPUT_DIR", input_dir)
-    shutil.copy2(Path(input_dir) / name, destination / name)
-    if os.environ.get("FAKE_GH_CORRUPT_ASSET") == name:
-        with (destination / name).open("ab") as handle:
-            handle.write(b"corrupt")
-    raise SystemExit(0)
-if args and args[0] == "api":
-    route = args[-1]
-    if "--method" in args:
-        raise SystemExit(0)
-    if route.endswith("/git/ref/tags/v1.2.3"):
-        print(json.dumps({"object": {"type": "tag", "sha": "b" * 40}}))
-        raise SystemExit(0)
-    if route.endswith("/git/tags/" + "b" * 40):
-        commit = os.environ.get("FAKE_GH_TAG_COMMIT", "a" * 40)
-        calls = [
-            json.loads(line)
-            for line in Path(os.environ["FAKE_GH_LOG"]).read_text(encoding="utf-8").splitlines()
-        ]
-        tag_object_reads = sum(
-            1
-            for call in calls
-            if call and call[0] == "api" and call[-1].endswith("/git/tags/" + "b" * 40)
-        )
-        if tag_object_reads >= 2:
-            commit = os.environ.get("FAKE_GH_TAG_COMMIT_AFTER_FIRST", commit)
-        print(json.dumps({"tag": "v1.2.3", "object": {"type": "commit", "sha": commit}}))
-        raise SystemExit(0)
-    if route.endswith("/compare/" + "a" * 40 + "...main"):
-        merge_base = os.environ.get("FAKE_GH_MAIN_MERGE_BASE", "a" * 40)
-        calls = [
-            json.loads(line)
-            for line in Path(os.environ["FAKE_GH_LOG"]).read_text(encoding="utf-8").splitlines()
-        ]
-        comparison_reads = sum(
-            1
-            for call in calls
-            if call and call[0] == "api" and "/compare/" in call[-1]
-        )
-        if comparison_reads >= 2:
-            merge_base = os.environ.get("FAKE_GH_MAIN_MERGE_BASE_AFTER_FIRST", merge_base)
-        print(json.dumps({"merge_base_commit": {"sha": merge_base}}))
-        raise SystemExit(0)
-    if "/releases/tags/" in route:
-        raise SystemExit("draft releases must not be fetched by tag through REST")
-    if route.endswith("/releases/123"):
-        release_json = os.environ["FAKE_GH_RELEASE_JSON"]
-        if os.environ.get("FAKE_GH_VIEW_STATE") == "public":
-            release_json = os.environ.get("FAKE_GH_PUBLIC_RELEASE_JSON", release_json)
-        release = json.loads(
-            Path(release_json).read_text(encoding="utf-8")
-        )
-        if os.environ.get("FAKE_GH_VIEW_STATE") == "public":
-            release["draft"] = False
-            release["html_url"] = (
-                "https://github.com/acg-box/deskhelm/releases/tag/v1.2.3"
-            )
-        print(json.dumps(release))
-        raise SystemExit(0)
-    if "/releases/123/assets?" in route:
-        assets_json = os.environ["FAKE_GH_ASSETS_JSON"]
-        if os.environ.get("FAKE_GH_VIEW_STATE") == "public":
-            assets_json = os.environ.get("FAKE_GH_PUBLIC_ASSETS_JSON", assets_json)
-        assets = json.loads(
-            Path(assets_json).read_text(encoding="utf-8")
-        )
-        if os.environ.get("FAKE_GH_VIEW_STATE") == "public":
-            for asset in assets:
-                asset["browser_download_url"] = (
-                    "https://github.com/acg-box/deskhelm/releases/download/"
-                    f"v1.2.3/{asset['name']}"
-                )
-        print(json.dumps(assets))
-        raise SystemExit(0)
-raise SystemExit(f"unexpected fake gh invocation: {args}")
-""",
-	)
-
-	env = os.environ.copy()
-	env.update(
-		{
-			"FAKE_GH_ASSETS_JSON": str(assets_json),
-			"FAKE_GH_INPUT_DIR": str(fixture_root),
-			"FAKE_GH_LOG": str(log_path),
-			"FAKE_GH_RELEASE_JSON": str(release_json),
-			"GH_TOKEN": "fixture-token",
-			"GITHUB_REPOSITORY": CANONICAL_REPOSITORY,
-			"GITHUB_SHA": "a" * 40,
-			"DESKHELM_GH_BIN": str(fake_gh),
-			"DESKHELM_OPENSSL_BIN": str(fake_openssl),
-			"DESKHELM_RELEASE_COMMIT": "a" * 40,
-			"DESKHELM_RELEASE_INPUT_DIR": str(fixture_root),
-			"DESKHELM_RELEASE_TAG": "v1.2.3",
-			"DESKHELM_RELEASE_VERSION": "1.2.3",
-			"DESKHELM_SPARKLE_VERSION": "2.9.4",
-			"DESKHELM_SPARKLE_PUBLIC_KEY_FILE": str(public_key_file),
-			"RUNNER_TEMP": str(fixture_root),
-		}
-	)
-	publisher = RELEASE_DIR / "publish-github-release.sh"
-	run([publisher], env=env)
-	calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-	assert calls[-1][0] == "api"
-	assert "PATCH" in calls[-1]
-	assert "make_latest=legacy" in calls[-1]
-	assert any(call[:2] == ["release", "create"] for call in calls)
-
-	log_path.unlink()
-	invalid_public_key_env = dict(env)
-	invalid_public_key_env["DESKHELM_SPARKLE_PUBLIC_KEY_FILE"] = str(
-		invalid_public_key_file
-	)
-	expect_failure([publisher], env=invalid_public_key_env)
-	assert not log_path.exists()
-
-	existing_draft_env = dict(env)
-	existing_draft_env["FAKE_GH_VIEW_STATE"] = "draft"
-	run([publisher], env=existing_draft_env)
-	existing_draft_calls = [
-		json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-	]
-	assert not any(call[:2] == ["release", "create"] for call in existing_draft_calls)
-	assert any(call[:2] == ["release", "upload"] for call in existing_draft_calls)
-	assert any(call[0] == "api" and "PATCH" in call for call in existing_draft_calls)
-
-	log_path.unlink()
-	invalid_env = dict(env)
-	invalid_env["FAKE_GH_CORRUPT_ASSET"] = APPCAST_NAME
-	expect_failure([publisher], env=invalid_env)
-	failed_calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-	assert not any(call[0] == "api" and "PATCH" in call for call in failed_calls)
-
-	log_path.unlink()
-	invalid_signature_env = dict(env)
-	invalid_signature_env["FAKE_OPENSSL_FAIL"] = "1"
-	expect_failure([publisher], env=invalid_signature_env)
-	invalid_signature_calls = [
-		json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-	]
-	assert not any(
-		call[0] == "api" and "PATCH" in call for call in invalid_signature_calls
-	)
-
-	log_path.unlink()
-	moved_tag_env = dict(env)
-	moved_tag_env["FAKE_GH_TAG_COMMIT"] = "c" * 40
-	expect_failure([publisher], env=moved_tag_env)
-	moved_tag_calls = [
-		json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-	]
-	assert not any(call[:2] == ["release", "create"] for call in moved_tag_calls)
-	assert not any(call[0] == "api" and "PATCH" in call for call in moved_tag_calls)
-
-	log_path.unlink()
-	late_moved_tag_env = dict(env)
-	late_moved_tag_env["FAKE_GH_TAG_COMMIT_AFTER_FIRST"] = "c" * 40
-	expect_failure([publisher], env=late_moved_tag_env)
-	late_moved_tag_calls = [
-		json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-	]
-	assert any(call[:2] == ["release", "create"] for call in late_moved_tag_calls)
-	assert any(call[:2] == ["release", "upload"] for call in late_moved_tag_calls)
-	assert not any(
-		call[0] == "api" and "PATCH" in call for call in late_moved_tag_calls
-	)
-
-	log_path.unlink()
-	late_main_drift_env = dict(env)
-	late_main_drift_env["FAKE_GH_MAIN_MERGE_BASE_AFTER_FIRST"] = "c" * 40
-	expect_failure([publisher], env=late_main_drift_env)
-	late_main_drift_calls = [
-		json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-	]
-	assert any(call[:2] == ["release", "create"] for call in late_main_drift_calls)
-	assert any(call[:2] == ["release", "upload"] for call in late_main_drift_calls)
-	assert not any(
-		call[0] == "api" and "PATCH" in call for call in late_main_drift_calls
-	)
-
-	log_path.unlink()
-	public_env = dict(env)
-	public_env["FAKE_GH_VIEW_STATE"] = "public"
-	public_env["FAKE_GH_PUBLIC_ASSETS_JSON"] = str(public_assets_json)
-	public_env["FAKE_GH_PUBLIC_INPUT_DIR"] = str(public_fixture_root)
-	public_env["FAKE_GH_PUBLIC_RELEASE_JSON"] = str(public_release_json)
-	run([publisher], env=public_env)
-	public_calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-	assert not any(call[:2] == ["release", "create"] for call in public_calls)
-	assert not any(call[:2] == ["release", "upload"] for call in public_calls)
-	assert not any(call[0] == "api" and "PATCH" in call for call in public_calls)
-	assert sum(call[:2] == ["release", "download"] for call in public_calls) == 3
 
 
 def test_package_orchestrator(tmp: Path) -> None:
@@ -927,6 +859,8 @@ if args and args[0] == "create-keychain":
     Path(args[-1]).touch()
 elif args and args[0] == "find-identity":
     print('  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Apple Development: DeskHelm Release (RD3D4LH465)"')
+    if os.environ.get("FAKE_SECURITY_MULTIPLE") == "1":
+        print('  2) BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB "Apple Development: Unexpected (OTHERTEAM1)"')
 """,
 	)
 	fake_build = tool(
@@ -1047,12 +981,15 @@ Path(args[args.index("--appcast") + 1]).write_text("<rss/>", encoding="utf-8")
 	expect_failure([package_script], env=missing_credential_env)
 	assert log_path.read_text(encoding="utf-8") == log_before_missing_credential
 
+	multiple_identity_env = dict(env)
+	multiple_identity_env["FAKE_SECURITY_MULTIPLE"] = "1"
+	expect_failure([package_script], env=multiple_identity_env)
+
 
 def test_static_contracts() -> None:
 	for script in (
 		ROOT / "script/build_and_run.sh",
 		RELEASE_DIR / "package-macos.sh",
-		RELEASE_DIR / "publish-github-release.sh",
 		RELEASE_DIR / "sign-macos-app.sh",
 		RELEASE_DIR / "sparkle-appcast.sh",
 	):
@@ -1060,27 +997,29 @@ def test_static_contracts() -> None:
 	for script in (
 		RELEASE_DIR / "self-check.py",
 		RELEASE_DIR / "validate-release-artifacts.py",
-		RELEASE_DIR / "validate-release-source.py",
 	):
 		compile(script.read_text(encoding="utf-8"), str(script), "exec")
 
 	release_workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 	language_workflow = (ROOT / ".github/workflows/language.yml").read_text(encoding="utf-8")
 	build_script = (ROOT / "script/build_and_run.sh").read_text(encoding="utf-8")
-	publisher_script = (RELEASE_DIR / "publish-github-release.sh").read_text(
+	publisher_script = (ROOT / "scripts/release/publish-github-release.ts").read_text(
 		encoding="utf-8"
 	)
 	assert "/usr/bin/xcode-select --print-path" in build_script
 	assert "Xcode beta is required" not in build_script
+	assert "/usr/bin/plutil -create binary1" in build_script
+	assert "/usr/bin/plutil -convert binary1" in build_script
 	assert "workflow_dispatch" not in release_workflow
 	assert "Release Preparation" not in release_workflow
 	assert "Release Prep" not in release_workflow
 	assert "Release Dry Run" not in release_workflow
 	assert "permissions:\n  contents: read" in release_workflow
-	assert "concurrency:\n  group: release-${{ github.ref_name }}" in release_workflow
+	assert "concurrency:\n  group: release\n  cancel-in-progress: false" in release_workflow
 	assert release_workflow.count("contents: write") == 1
 	assert release_workflow.count("name: release") == 1
 	assert "runs-on: macos-26" in release_workflow
+	assert release_workflow.count("node-version-file: .node-version") == 3
 	assert "needs: validate-release" in release_workflow
 	assert "needs: [validate-release, build-macos]" in release_workflow
 	assert "DESKHELM_SPARKLE_PRIVATE_ED_KEY" in release_workflow
@@ -1099,8 +1038,11 @@ def test_static_contracts() -> None:
 		RELEASE_DIR / "sign-macos-app.sh"
 	).read_text(encoding="utf-8")
 	assert "--verify-appcast-signature" in publisher_script
-	assert "make_latest=legacy" in publisher_script
+	assert "make_latest: 'true'" in publisher_script
 	assert "releases/tags/" not in publisher_script
+	assert "https://uploads.github.com" in publisher_script
+	assert "release upload" not in publisher_script
+	assert "DESKHELM_GH_BIN" not in publisher_script
 	for match in re.finditer(r"^\s*uses:\s*[^\s]+@([^\s]+)", release_workflow, re.MULTILINE):
 		assert re.fullmatch(r"[0-9a-f]{40}", match.group(1)), match.group(0)
 	for required in (
@@ -1113,6 +1055,13 @@ def test_static_contracts() -> None:
 		assert required in language_workflow
 	assert "swift-check:" not in language_workflow
 	assert "runs-on: macos-" not in language_workflow
+	assert 'cd "$RUNNER_TEMP"' in language_workflow
+	assert (
+		"npm install --global --ignore-scripts --no-audit --no-fund npm@11.16.0"
+		in language_workflow
+	)
+	assert 'test "$(npm --version)" = "11.16.0"' in language_workflow
+	assert 'cd "$workspace"\n          npm ci --ignore-scripts' in language_workflow
 
 	tracked_paths = run(
 		["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -1121,7 +1070,9 @@ def test_static_contracts() -> None:
 	tracked_text = "\n".join(
 		(ROOT / relative_path).read_text(encoding="utf-8", errors="ignore")
 		for relative_path in tracked_paths
-		if relative_path and (ROOT / relative_path).stat().st_size < 2_000_000
+		if relative_path
+		and (ROOT / relative_path).exists()
+		and (ROOT / relative_path).stat().st_size < 2_000_000
 	)
 	assert ("acg" + "xv/deskhelm") not in tracked_text
 

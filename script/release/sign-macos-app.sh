@@ -89,17 +89,46 @@ if [[ ! -x "$codesign_bin" ]]; then
 fi
 
 framework="$app_path/Contents/Frameworks/Sparkle.framework"
+versions_root="$framework/Versions"
 current_link="$framework/Versions/Current"
 if [[ ! -L "$current_link" ]]; then
 	echo "error: Sparkle Versions/Current must be a symbolic link" >&2
 	exit 1
 fi
 current_version="$(readlink "$current_link")"
-if [[ "$current_version" != "B" ]]; then
-	echo "error: unsupported Sparkle framework layout: Versions/Current -> $current_version" >&2
+if [[ -z "$current_version" \
+	|| "$current_version" == "." \
+	|| "$current_version" == ".." \
+	|| "$current_version" == "Current" \
+	|| "$current_version" == */* \
+	|| ! "$current_version" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+	echo "error: Sparkle Versions/Current must name one direct Versions child" >&2
 	exit 1
 fi
 version_root="$framework/Versions/$current_version"
+if [[ ! -d "$version_root" || -L "$version_root" ]]; then
+	echo "error: Sparkle Versions/Current target must be one real directory: $current_version" >&2
+	exit 1
+fi
+resolved_versions_root="$(cd "$versions_root" && pwd -P)"
+resolved_version_root="$(cd "$version_root" && pwd -P)"
+if [[ "$(dirname "$resolved_version_root")" != "$resolved_versions_root" ]]; then
+	echo "error: Sparkle Versions/Current must resolve to one direct Versions child" >&2
+	exit 1
+fi
+shopt -s dotglob nullglob
+version_entries=("$versions_root"/*)
+shopt -u dotglob nullglob
+if [[ "${#version_entries[@]}" -ne 2 ]]; then
+	echo "error: Sparkle Versions must contain only Current and its selected version" >&2
+	exit 1
+fi
+for version_entry in "${version_entries[@]}"; do
+	if [[ "$version_entry" != "$current_link" && "$version_entry" != "$version_root" ]]; then
+		echo "error: unsupported Sparkle Versions entry: $(basename "$version_entry")" >&2
+		exit 1
+	fi
+done
 installer="$version_root/XPCServices/Installer.xpc"
 downloader="$version_root/XPCServices/Downloader.xpc"
 autoupdate="$version_root/Autoupdate"
@@ -119,6 +148,18 @@ for required_path in \
 done
 if [[ ! -f "$autoupdate" || ! -x "$autoupdate" ]]; then
 	echo "error: Sparkle Autoupdate must be an executable file" >&2
+	exit 1
+fi
+
+expected_nested_bundles="$(
+	printf '%s\n' "$downloader" "$installer" "$updater" | LC_ALL=C sort
+)"
+actual_nested_bundles="$(
+	find "$version_root" -type d \( -name '*.app' -o -name '*.xpc' \) -print \
+		| LC_ALL=C sort
+)"
+if [[ "$actual_nested_bundles" != "$expected_nested_bundles" ]]; then
+	echo "error: unsupported nested Sparkle code graph under Versions/$current_version" >&2
 	exit 1
 fi
 
