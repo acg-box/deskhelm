@@ -33,8 +33,8 @@ firmware, cables, adapters, and docks can change DDC/CI compatibility.
 
 - `apps/deskhelm/` owns the shared Rust core, CLI, and C ABI.
 - `apps/deskhelm/macos/` owns the native AppKit and SwiftUI menu-bar app.
-- `script/` owns native build and diagnostic commands, while `scripts/` owns
-  repository-maintenance TypeScript programs.
+- `script/` owns native build, release, and diagnostic commands, while
+  `scripts/` owns repository-maintenance TypeScript programs.
 - `packages/` is reserved for reusable shared packages.
 - The root `Cargo.toml` owns Rust workspace metadata, profiles, and dependency
   versions.
@@ -64,14 +64,15 @@ cargo build --locked -p deskhelm
 ./script/build_and_run.sh
 ```
 
-#### Download Pre-built Binary
+#### Download DeskHelm for macOS
 
-- **macOS**
-    - Tagged releases publish the CLI through [GitHub Releases](https://github.com/acg-box/deskhelm/releases/latest). Build the native menu-bar app from source.
-- **Windows**
-    - Tagged releases publish a CLI archive, but display control is not implemented on Windows.
-- **Unix**
-    - Tagged releases publish a Linux CLI archive, but display control is not implemented on Linux.
+Stable [GitHub Releases](https://github.com/acg-box/deskhelm/releases/latest)
+provide `deskhelm-aarch64-apple-darwin.zip`. The archive contains the signed and
+unnotarized `DeskHelm.app` for Apple Silicon. On first launch, macOS can block
+the app because this open-source release uses a free Apple Development
+certificate. Open **System Settings > Privacy & Security**, select **Open
+Anyway** for DeskHelm, then confirm **Open**. DeskHelm does not publish Windows
+or Linux archives because display control is not implemented on those platforms.
 
 ### Configuration
 
@@ -105,8 +106,9 @@ discards the old display session. After the connection settles, it discovers the
 display again, uses bounded fresh reads, and restores interception.
 
 Open **Settings > General** to enable launch at login. The About pane shows the
-current update configuration. A source build without a signed Sparkle appcast
-opens GitHub Releases instead of claiming that an in-app update is available.
+current update configuration. A source build without the production Sparkle
+public key opens GitHub Releases instead of claiming that an in-app update is
+available.
 
 ### Interaction
 
@@ -141,7 +143,12 @@ Confirm native menu construction, or also open and validate Settings:
 
 ### Update
 
-Pull the latest `main` branch and rebuild the selected interface:
+A distributed app uses `appcast.xml`; each enclosure carries the Sparkle
+signature for its release archive. Open **Settings > About** and select
+**Check Now**, or choose an automatic update mode. A source build has no
+production update key and opens GitHub Releases instead.
+
+To update a source build, pull `main` and rebuild:
 
 ```sh
 git pull --ff-only
@@ -169,6 +176,38 @@ Run the complete Rust, Swift, TypeScript, and TOML validation gate:
 ```sh
 cargo make check
 ```
+
+Run the credential-free release contract checks separately when changing the
+release workflow:
+
+```sh
+cargo make test-release
+```
+
+### Release Maintainers
+
+The release workflow starts only for an annotated `vX.Y.Z` tag. The tag version
+must match the workspace version, and its commit must be reachable from the
+canonical `main` branch. The workflow validates on Linux, builds and signs the
+app on `macos-26`, then returns to Linux to validate a GitHub draft before
+it publishes the draft. It has no manual preparation or dry-run workflow.
+
+The checked-in `script/release/sparkle-public-ed-key.txt` contains DeskHelm's
+public Sparkle key. Configure the matching private key as the repository secret
+`DESKHELM_SPARKLE_PRIVATE_ED_KEY`, and make these organization secrets
+available to the repository:
+
+- `APPLE_CERTIFICATE_P12_BASE64`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_SIGNING_IDENTITY`
+
+DeskHelm must use its own Sparkle key pair. Do not reuse another application's
+private or public key. The `release` environment protects only the final Linux
+publisher. The release scripts bind Apple Development signing to Personal Team
+`RD3D4LH465`; a different Apple team is rejected. The build uses Hardened
+Runtime without a signing timestamp and is not notarized. Only the final
+publisher receives GitHub contents write permission. The workflow does not
+publish the Rust crate.
 
 ### Architecture
 

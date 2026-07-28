@@ -294,21 +294,39 @@ args = [
 ]
 
 # Test
-# | task            | type      | cwd |
-# | --------------- | --------- | --- |
-# | test            | composite |     |
-# | test-rust       | command   |     |
-# | test-swift      | command   |     |
-# | test-typescript | command   |     |
+# | task               | type      | cwd |
+# | ------------------ | --------- | --- |
+# | test               | composite |     |
+# | test-macos-release | command   |     |
+# | test-release       | command   |     |
+# | test-rust          | command   |     |
+# | test-swift         | command   |     |
+# | test-typescript    | command   |     |
 
 [tasks.test]
 clear = true
 workspace = false
 dependencies = [
+	"test-release",
 	"test-rust",
 	"test-swift",
 	"test-typescript",
 ]
+
+[tasks.test-release]
+workspace = false
+command = "./script/release/self-check.py"
+
+[tasks.test-macos-release]
+workspace = false
+condition = { platforms = ["mac"] }
+dependencies = [
+	"test-release",
+]
+script = '''
+DESKHELM_CONFIGURATION=release ./script/build_and_run.sh --test
+DESKHELM_CONFIGURATION=release ./script/build_and_run.sh --build-only
+'''
 
 [tasks.test-rust]
 workspace = false

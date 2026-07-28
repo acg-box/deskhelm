@@ -64,6 +64,9 @@ jobs:
       - name: Run Rust tests
         run: cargo make test-rust
 
+      - name: Run release workflow self-check
+        run: cargo make test-release
+
   toml-check:
     name: TOML check
     runs-on: ubuntu-latest
