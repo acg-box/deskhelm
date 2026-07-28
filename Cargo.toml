@@ -20,5 +20,5 @@ lto      = true
 clap                = { version = "4.6", features = ["derive"] }
 color-eyre          = { version = "0.6" }
 core-foundation-sys = { version = "0.8" }
-core-graphics       = { version = "=0.24.0" }
+core-graphics       = { version = "=0.25.0" }
 io-kit-sys          = { version = "=0.4.1" }
