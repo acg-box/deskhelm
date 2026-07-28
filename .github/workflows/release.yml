@@ -56,17 +56,14 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
   build-macos:
-    name: Test and package notarized macOS app
+    name: Test and package signed macOS app
     needs: validate-release
     runs-on: macos-26
     timeout-minutes: 75
-    environment:
-      name: release
     env:
       DESKHELM_RELEASE_COMMIT: ${{ needs.validate-release.outputs.tag_commit }}
       DESKHELM_RELEASE_TAG: ${{ github.ref_name }}
       DESKHELM_RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
-      DESKHELM_SPARKLE_PUBLIC_ED_KEY: ${{ vars.DESKHELM_SPARKLE_PUBLIC_ED_KEY }}
       DESKHELM_SPARKLE_VERSION: ${{ needs.validate-release.outputs.sparkle_version }}
     steps:
       - name: Fetch validated source
@@ -101,19 +98,16 @@ jobs:
       - name: Run release tests
         run: cargo make test-macos-release
 
-      - name: Build, sign, notarize, staple, and package
+      - name: Build, sign, and package
         env:
-          APPLE_DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_IDENTITY }}
-          APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           DESKHELM_RELEASE_OUTPUT_DIR: dist
           DESKHELM_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.DESKHELM_SPARKLE_PRIVATE_ED_KEY }}
         run: script/release/package-macos.sh
 
-      - name: Upload notarized release assets
+      - name: Upload signed release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deskhelm-aarch64-apple-darwin
@@ -137,7 +131,6 @@ jobs:
       DESKHELM_RELEASE_COMMIT: ${{ needs.validate-release.outputs.tag_commit }}
       DESKHELM_RELEASE_TAG: ${{ github.ref_name }}
       DESKHELM_RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
-      DESKHELM_SPARKLE_PUBLIC_ED_KEY: ${{ vars.DESKHELM_SPARKLE_PUBLIC_ED_KEY }}
       DESKHELM_SPARKLE_VERSION: ${{ needs.validate-release.outputs.sparkle_version }}
     steps:
       - name: Fetch validated source
@@ -146,7 +139,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Download notarized release assets
+      - name: Download signed release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: deskhelm-aarch64-apple-darwin

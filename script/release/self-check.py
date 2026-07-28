@@ -212,14 +212,19 @@ args = sys.argv[1:]
 with Path(os.environ["CODESIGN_LOG"]).open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(args) + "\\n")
 if "-dv" in args:
+    team = (
+        "OTHERTEAM1"
+        if os.environ.get("FAKE_CODESIGN_DETAILS") == "wrong_team"
+        else "RD3D4LH465"
+    )
     lines = [
         "Executable=fake",
         "Identifier=fake",
         "CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+0 location=embedded",
-        "Authority=Developer ID Application: DeskHelm Release (TEAM123)",
-        "TeamIdentifier=TEAM123",
+        f"Authority=Apple Development: DeskHelm Release ({team})",
+        f"TeamIdentifier={team}",
     ]
-    if os.environ.get("FAKE_CODESIGN_DETAILS") != "missing_timestamp":
+    if os.environ.get("FAKE_CODESIGN_DETAILS") == "unexpected_timestamp":
         lines.append("Timestamp=Jul 26, 2026 at 1:00:00 PM")
     print("\\n".join(lines), file=sys.stderr)
 elif "--entitlements" in args and "-d" in args:
@@ -228,7 +233,7 @@ elif "--entitlements" in args and "-d" in args:
 	)
 	env = os.environ.copy()
 	env.update({"CODESIGN_LOG": str(log_path), "DESKHELM_CODESIGN_BIN": str(fake_codesign)})
-	identity = "Developer ID Application: DeskHelm Release (TEAM123)"
+	identity = "Apple Development: DeskHelm Release (RD3D4LH465)"
 	run(
 		[
 			RELEASE_DIR / "sign-macos-app.sh",
@@ -259,14 +264,14 @@ elif "--entitlements" in args and "-d" in args:
 		assert "--deep" not in call
 		assert call.index("--sign") < call.index("--options")
 		assert call[call.index("--options") + 1] == "runtime"
-		assert "--timestamp" in call
+		assert "--timestamp=none" in call
 	assert "--preserve-metadata=entitlements" not in sign_calls[0]
 	assert "--preserve-metadata=entitlements" in sign_calls[1]
 	assert all("--preserve-metadata=entitlements" not in call for call in sign_calls[2:])
 	assert any("--deep" in call and "--verify" in call for call in calls)
 
 	invalid_env = dict(env)
-	invalid_env["FAKE_CODESIGN_DETAILS"] = "missing_timestamp"
+	invalid_env["FAKE_CODESIGN_DETAILS"] = "unexpected_timestamp"
 	expect_failure(
 		[
 			RELEASE_DIR / "sign-macos-app.sh",
@@ -280,6 +285,23 @@ elif "--entitlements" in args and "-d" in args:
 			"release",
 		],
 		env=invalid_env,
+	)
+
+	wrong_team_env = dict(env)
+	wrong_team_env["FAKE_CODESIGN_DETAILS"] = "wrong_team"
+	expect_failure(
+		[
+			RELEASE_DIR / "sign-macos-app.sh",
+			"--app",
+			app,
+			"--identity",
+			identity,
+			"--keychain",
+			keychain,
+			"--mode",
+			"release",
+		],
+		env=wrong_team_env,
 	)
 
 
@@ -588,6 +610,10 @@ def test_artifact_validator(tmp: Path) -> None:
 def test_publisher(tmp: Path) -> None:
 	fixture_root = tmp / "publisher"
 	fixture_root.mkdir()
+	public_key_file = fixture_root / "sparkle-public-ed-key.txt"
+	public_key_file.write_text(f"{PUBLIC_KEY}\n", encoding="utf-8")
+	invalid_public_key_file = fixture_root / "invalid-sparkle-public-ed-key.txt"
+	invalid_public_key_file.write_text("not-base64\n", encoding="utf-8")
 	local_archive, _, _, release_json, assets_json = write_artifact_fixture(fixture_root)
 	public_fixture_root = tmp / "publisher-public"
 	public_fixture_root.mkdir()
@@ -774,7 +800,7 @@ raise SystemExit(f"unexpected fake gh invocation: {args}")
 			"DESKHELM_RELEASE_TAG": "v1.2.3",
 			"DESKHELM_RELEASE_VERSION": "1.2.3",
 			"DESKHELM_SPARKLE_VERSION": "2.9.4",
-			"DESKHELM_SPARKLE_PUBLIC_ED_KEY": PUBLIC_KEY,
+			"DESKHELM_SPARKLE_PUBLIC_KEY_FILE": str(public_key_file),
 			"RUNNER_TEMP": str(fixture_root),
 		}
 	)
@@ -788,7 +814,9 @@ raise SystemExit(f"unexpected fake gh invocation: {args}")
 
 	log_path.unlink()
 	invalid_public_key_env = dict(env)
-	invalid_public_key_env["DESKHELM_SPARKLE_PUBLIC_ED_KEY"] = "not-base64"
+	invalid_public_key_env["DESKHELM_SPARKLE_PUBLIC_KEY_FILE"] = str(
+		invalid_public_key_file
+	)
 	expect_failure([publisher], env=invalid_public_key_env)
 	assert not log_path.exists()
 
@@ -898,7 +926,7 @@ with Path(os.environ["RELEASE_TOOL_LOG"]).open("a", encoding="utf-8") as handle:
 if args and args[0] == "create-keychain":
     Path(args[-1]).touch()
 elif args and args[0] == "find-identity":
-    print('  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Developer ID Application: DeskHelm Release (TEAM123)"')
+    print('  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Apple Development: DeskHelm Release (RD3D4LH465)"')
 """,
 	)
 	fake_build = tool(
@@ -908,12 +936,9 @@ import os
 import plistlib
 from pathlib import Path
 secret_names = (
-    "APPLE_DEVELOPER_ID_APPLICATION_IDENTITY",
-    "APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64",
-    "APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD",
-    "APPLE_NOTARY_ISSUER_ID",
-    "APPLE_NOTARY_KEY_ID",
-    "APPLE_NOTARY_KEY_P8",
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_CERTIFICATE_P12_BASE64",
+    "APPLE_CERTIFICATE_PASSWORD",
     "DESKHELM_SPARKLE_PRIVATE_ED_KEY",
 )
 leaked = [name for name in secret_names if name in os.environ]
@@ -921,7 +946,7 @@ if leaked:
     raise SystemExit(f"release credentials leaked to build: {{leaked}}")
 app = Path(os.environ["DESKHELM_APP_STAGE_DIR"]) / "DeskHelm.app"
 work_root = app.parents[1]
-if (work_root / "developer-id.p12").exists() or list(work_root.glob("AuthKey_*.p8")):
+if (work_root / "apple-development.p12").exists():
     raise SystemExit("release credentials were materialized before the build completed")
 (app / "Contents/MacOS").mkdir(parents=True)
 (app / "Contents/MacOS/DeskHelmMac").write_bytes(b"mach-o")
@@ -948,15 +973,6 @@ with Path(os.environ["RELEASE_TOOL_LOG"]).open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(["codesign", *sys.argv[1:]]) + "\\n")
 """,
 	)
-	fake_spctl = tool(
-		"spctl",
-		"""#!/usr/bin/env python3
-import json, os, sys
-from pathlib import Path
-with Path(os.environ["RELEASE_TOOL_LOG"]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(["spctl", *sys.argv[1:]]) + "\\n")
-""",
-	)
 	fake_ditto = tool(
 		"ditto",
 		"""#!/usr/bin/env python3
@@ -966,27 +982,6 @@ args = sys.argv[1:]
 with Path(os.environ["RELEASE_TOOL_LOG"]).open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(["ditto", *args]) + "\\n")
 Path(args[-1]).write_bytes(b"zip-bytes")
-""",
-	)
-	fake_xcrun = tool(
-		"xcrun",
-		"""#!/usr/bin/env python3
-import json, os, sys
-from pathlib import Path
-args = sys.argv[1:]
-with Path(os.environ["RELEASE_TOOL_LOG"]).open("a", encoding="utf-8") as handle:
-    handle.write(json.dumps(["xcrun", *args]) + "\\n")
-if args and args[0] == "notarytool":
-    submission_id = "12345678-1234-1234-1234-123456789abc"
-    if args[1] == "submit":
-        print(json.dumps({"id": submission_id, "message": "Successfully uploaded file"}))
-    elif args[1] == "wait":
-        if os.environ.get("FAKE_NOTARY_WAIT_FAIL") == "1":
-            raise SystemExit(1)
-        print(json.dumps({
-            "status": os.environ.get("FAKE_NOTARY_STATUS", "Accepted"),
-            "id": submission_id,
-        }))
 """,
 	)
 	fake_appcast = tool(
@@ -1000,20 +995,19 @@ with Path(os.environ["RELEASE_TOOL_LOG"]).open("a", encoding="utf-8") as handle:
 Path(args[args.index("--appcast") + 1]).write_text("<rss/>", encoding="utf-8")
 """,
 	)
+	public_key_file = fixture_root / "sparkle-public-ed-key.txt"
+	public_key_file.write_text(f"{PUBLIC_KEY}\n", encoding="utf-8")
 
 	env = os.environ.copy()
 	for key in ("SPARKLE_PRIVATE_ED_KEY", "SPARKLE_PUBLIC_ED_KEY"):
 		env.pop(key, None)
 	env.update(
 		{
-			"APPLE_DEVELOPER_ID_APPLICATION_IDENTITY": (
-				"Developer ID Application: DeskHelm Release (TEAM123)"
+			"APPLE_SIGNING_IDENTITY": (
+				"Apple Development: DeskHelm Release (RD3D4LH465)"
 			),
-			"APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64": base64.b64encode(b"cert").decode(),
-			"APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD": "fixture-password",
-			"APPLE_NOTARY_ISSUER_ID": "fixture-issuer",
-			"APPLE_NOTARY_KEY_ID": "FIXTURE123",
-			"APPLE_NOTARY_KEY_P8": "fixture-p8",
+			"APPLE_CERTIFICATE_P12_BASE64": base64.b64encode(b"cert").decode(),
+			"APPLE_CERTIFICATE_PASSWORD": "fixture-password",
 			"ImageOS": "macos26",
 			"RELEASE_TOOL_LOG": str(log_path),
 			"DESKHELM_APPCAST_BIN": str(fake_appcast),
@@ -1028,12 +1022,10 @@ Path(args[args.index("--appcast") + 1]).write_text("<rss/>", encoding="utf-8")
 			"DESKHELM_SECURITY_BIN": str(fake_security),
 			"DESKHELM_SIGN_APP_BIN": str(fake_sign),
 			"DESKHELM_SPARKLE_PRIVATE_ED_KEY": "fixture-private-key",
-			"DESKHELM_SPARKLE_PUBLIC_ED_KEY": PUBLIC_KEY,
+			"DESKHELM_SPARKLE_PUBLIC_KEY_FILE": str(public_key_file),
 			"DESKHELM_SPARKLE_VERSION": "2.9.4",
-			"DESKHELM_SPCTL_BIN": str(fake_spctl),
 			"DESKHELM_UNAME_BIN": str(fake_uname),
 			"DESKHELM_VERIFY_SPARKLE_KEY_BIN": str(fake_key_verifier),
-			"DESKHELM_XCRUN_BIN": str(fake_xcrun),
 			"RUNNER_ARCH": "ARM64",
 			"RUNNER_TEMP": str(runner_temp),
 		}
@@ -1045,42 +1037,12 @@ Path(args[args.index("--appcast") + 1]).write_text("<rss/>", encoding="utf-8")
 	assert (output / CHECKSUM_NAME).is_file()
 	calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
 	tool_names = [call[0] for call in calls]
-	assert tool_names.index("sign") < tool_names.index("xcrun")
-	notary_index = next(
-		index for index, call in enumerate(calls) if call[:3] == ["xcrun", "notarytool", "submit"]
-	)
-	staple_index = next(
-		index for index, call in enumerate(calls) if call[:3] == ["xcrun", "stapler", "staple"]
-	)
-	spctl_index = tool_names.index("spctl")
 	final_zip_index = max(index for index, call in enumerate(calls) if call[0] == "ditto")
 	appcast_index = tool_names.index("appcast")
-	assert notary_index < staple_index < spctl_index < final_zip_index < appcast_index
-
-	invalid_output = fixture_root / "invalid-output"
-	invalid_env = dict(env)
-	invalid_env["FAKE_NOTARY_STATUS"] = "Invalid"
-	invalid_env["DESKHELM_RELEASE_OUTPUT_DIR"] = str(invalid_output)
-	expect_failure([package_script], env=invalid_env)
-	assert not (invalid_output / ARCHIVE_NAME).exists()
-	assert not (invalid_output / APPCAST_NAME).exists()
-
-	timeout_output = fixture_root / "timeout-output"
-	timeout_env = dict(env)
-	timeout_env["FAKE_NOTARY_WAIT_FAIL"] = "1"
-	timeout_env["DESKHELM_RELEASE_OUTPUT_DIR"] = str(timeout_output)
-	log_line_count = len(log_path.read_text(encoding="utf-8").splitlines())
-	timeout_result = run([package_script], env=timeout_env, check=False)
-	assert timeout_result.returncode != 0
-	assert "12345678-1234-1234-1234-123456789abc" in timeout_result.stderr
-	timeout_calls = [
-		json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-	][log_line_count:]
-	assert not any(call[:3] == ["xcrun", "stapler", "staple"] for call in timeout_calls)
-	assert not (timeout_output / ARCHIVE_NAME).exists()
+	assert tool_names.index("sign") < final_zip_index < appcast_index
 
 	missing_credential_env = dict(env)
-	missing_credential_env.pop("APPLE_NOTARY_ISSUER_ID")
+	missing_credential_env.pop("APPLE_SIGNING_IDENTITY")
 	log_before_missing_credential = log_path.read_text(encoding="utf-8")
 	expect_failure([package_script], env=missing_credential_env)
 	assert log_path.read_text(encoding="utf-8") == log_before_missing_credential
@@ -1117,14 +1079,25 @@ def test_static_contracts() -> None:
 	assert "permissions:\n  contents: read" in release_workflow
 	assert "concurrency:\n  group: release-${{ github.ref_name }}" in release_workflow
 	assert release_workflow.count("contents: write") == 1
-	assert release_workflow.count("name: release") == 2
+	assert release_workflow.count("name: release") == 1
 	assert "runs-on: macos-26" in release_workflow
 	assert "needs: validate-release" in release_workflow
 	assert "needs: [validate-release, build-macos]" in release_workflow
 	assert "DESKHELM_SPARKLE_PRIVATE_ED_KEY" in release_workflow
-	assert "DESKHELM_SPARKLE_PUBLIC_ED_KEY" in release_workflow
+	assert "DESKHELM_SPARKLE_PUBLIC_ED_KEY" not in release_workflow
+	assert "APPLE_CERTIFICATE_P12_BASE64" in release_workflow
+	assert "APPLE_CERTIFICATE_PASSWORD" in release_workflow
+	assert "APPLE_SIGNING_IDENTITY" in release_workflow
+	assert "APPLE_NOTARY_" not in release_workflow
+	assert "APPLE_DEVELOPER_ID_" not in release_workflow
 	assert re.search(r"^\s+SPARKLE_PRIVATE_ED_KEY:", release_workflow, re.MULTILINE) is None
 	assert re.search(r"^\s+SPARKLE_PUBLIC_ED_KEY:", release_workflow, re.MULTILINE) is None
+	assert "EXPECTED_APPLE_TEAM_ID=\"RD3D4LH465\"" in (
+		RELEASE_DIR / "package-macos.sh"
+	).read_text(encoding="utf-8")
+	assert "EXPECTED_APPLE_TEAM_ID=\"RD3D4LH465\"" in (
+		RELEASE_DIR / "sign-macos-app.sh"
+	).read_text(encoding="utf-8")
 	assert "--verify-appcast-signature" in publisher_script
 	assert "make_latest=legacy" in publisher_script
 	assert "releases/tags/" not in publisher_script
@@ -1132,13 +1105,14 @@ def test_static_contracts() -> None:
 		assert re.fullmatch(r"[0-9a-f]{40}", match.group(1)), match.group(0)
 	for required in (
 		"rust-check:",
-		"swift-check:",
 		"toml-check:",
-		"runs-on: macos-26",
+		"typescript-check:",
 		"pull_request:",
 		"merge_group:",
 	):
 		assert required in language_workflow
+	assert "swift-check:" not in language_workflow
+	assert "runs-on: macos-" not in language_workflow
 
 	tracked_paths = run(
 		["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],

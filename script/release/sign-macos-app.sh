@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+EXPECTED_APPLE_TEAM_ID="RD3D4LH465"
+
 usage() {
 	cat >&2 <<'USAGE'
 usage: script/release/sign-macos-app.sh --app APP --identity ID [options]
@@ -70,8 +72,8 @@ if [[ -n "$keychain_path" && ! -f "$keychain_path" ]]; then
 	exit 1
 fi
 if [[ "$mode" == "release" ]]; then
-	if [[ "$identity" != "Developer ID Application: "* ]]; then
-		echo "error: release signing requires a Developer ID Application identity" >&2
+	if [[ ! "$identity" =~ ^Apple\ Development:\ .+\ \(${EXPECTED_APPLE_TEAM_ID}\)$ ]]; then
+		echo "error: release signing requires Personal Team $EXPECTED_APPLE_TEAM_ID" >&2
 		exit 1
 	fi
 	if [[ -z "$keychain_path" ]]; then
@@ -128,11 +130,7 @@ sign_one() {
 		command+=(--keychain "$keychain_path")
 	fi
 	command+=(--options runtime)
-	if [[ "$mode" == "release" ]]; then
-		command+=(--timestamp)
-	else
-		command+=(--timestamp=none)
-	fi
+	command+=(--timestamp=none)
 	command+=("$@" "$target")
 	"${command[@]}"
 }
@@ -171,12 +169,12 @@ if [[ "$mode" == "release" ]]; then
 			echo "error: hardened runtime is missing from $target" >&2
 			exit 1
 		fi
-		if ! grep -q '^Authority=Developer ID Application:' <<<"$details"; then
-			echo "error: Developer ID Application authority is missing from $target" >&2
+		if ! grep -q '^Authority=Apple Development:' <<<"$details"; then
+			echo "error: Apple Development authority is missing from $target" >&2
 			exit 1
 		fi
-		if ! grep -q '^Timestamp=' <<<"$details"; then
-			echo "error: secure timestamp is missing from $target" >&2
+		if grep -q '^Timestamp=' <<<"$details"; then
+			echo "error: Apple Development release signatures must not request a timestamp on $target" >&2
 			exit 1
 		fi
 		if grep -q '^Signature=adhoc' <<<"$details"; then
@@ -186,6 +184,10 @@ if [[ "$mode" == "release" ]]; then
 		team="$(sed -n 's/^TeamIdentifier=//p' <<<"$details" | head -n 1)"
 		if [[ -z "$team" ]]; then
 			echo "error: TeamIdentifier is missing from $target" >&2
+			exit 1
+		fi
+		if [[ "$team" != "$EXPECTED_APPLE_TEAM_ID" ]]; then
+			echo "error: unexpected Apple TeamIdentifier on $target" >&2
 			exit 1
 		fi
 		if [[ -z "$expected_team" ]]; then

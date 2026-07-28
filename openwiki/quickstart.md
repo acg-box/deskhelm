@@ -17,7 +17,7 @@ Sources: `README.md`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/`, `apps/de
 
 ## Install A Release
 
-The release pipeline publishes `deskhelm-aarch64-apple-darwin.zip`, which contains a signed and notarized `DeskHelm.app` for Apple Silicon. DeskHelm no longer publishes Windows or Linux archives because display control is not implemented there. A distributed app uses `appcast.xml`, whose enclosure carries the Sparkle signature for the release archive; use **Settings > About > Check Now** or select an automatic update mode. Default source builds omit production update configuration and open GitHub Releases instead. [Operations](operations.md#release-pipeline) documents the release, signing, appcast, and publication contract.
+The release pipeline publishes `deskhelm-aarch64-apple-darwin.zip`, which contains a Hardened Runtime app signed with the project's free Apple Development certificate. The app is not notarized. On first launch, macOS can require **System Settings > Privacy & Security > Open Anyway**, followed by **Open**. DeskHelm no longer publishes Windows or Linux archives because display control is not implemented there. A distributed app uses `appcast.xml`, whose enclosure carries the Sparkle signature for the release archive; use **Settings > About > Check Now** or select an automatic update mode. Default source builds omit production update configuration and open GitHub Releases instead. [Operations](operations.md#release-pipeline) documents the release, signing, appcast, and publication contract.
 
 ## Requirements
 
@@ -98,16 +98,16 @@ The Swift tests cover volume-state validation, refresh outcomes, one requested r
 ## Wiki Map
 
 - [Architecture and Runtime](architecture-and-runtime.md) - Rust core, C ABI, AppKit status menu and Settings shell, SwiftUI display workflow, app services, DDC/CI flow, and hardware boundary.
-- [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and signed/notarized macOS release packaging.
+- [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and Apple Development-signed macOS release packaging.
 - [Template Adoption](template-adoption.md) - completed transition from the placeholder template to DeskHelm and identity consistency checks.
 - [Knowledge Maintenance](knowledge-maintenance.md) - OpenWiki routing, claim ownership, manual regeneration, evidence rules, and historical documentation decisions.
 
 ## Repository Boundaries
 
 - `apps/deskhelm/src/` owns the Rust core, C ABI, and CLI; `apps/deskhelm/macos/` owns the SwiftPM native app.
-- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics; `script/release/` owns source validation, signing, notarization, appcast creation, artifact validation, and publication. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
+- `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics; `script/release/` owns source validation, signing, appcast creation, artifact validation, and publication. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
 - `packages/` is reserved for reusable packages. Root `Cargo.toml` owns workspace membership and shared Rust versions.
-- `Makefile.toml` owns local validation tasks. Existing GitHub workflows own language/Swift CI and Apple Silicon app release orchestration.
+- `Makefile.toml` owns local validation tasks. Existing GitHub workflows own Linux language checks and Apple Silicon app release orchestration; local macOS checks and the release job own Swift validation.
 - `openwiki/` is the maintained repository knowledge surface. [Knowledge Maintenance](knowledge-maintenance.md) defines how to update it without creating competing documentation or recurring automation.
 
 ## Before Changing Anything

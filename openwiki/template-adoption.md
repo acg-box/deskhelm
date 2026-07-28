@@ -23,7 +23,7 @@ The migration changed these coupled values together:
 - Private npm tooling package: the former placeholder value changed to `deskhelm-workspace`.
 - Workspace description, homepage, and repository metadata to DeskHelm and `acg-box/deskhelm`.
 - README content from placeholder/TODO guidance to the public product pitch, supported status, workspace ownership, installation, interaction, update, development, and release-download guidance.
-- Release selectors, executable paths, archive names, and artifact globs to `deskhelm`; later release hardening narrowed distribution to the signed and notarized Apple Silicon app and removed crates.io publication.
+- Release selectors, executable paths, archive names, and artifact globs to `deskhelm`; later release hardening narrowed distribution to the Apple Development-signed Apple Silicon app and removed crates.io publication.
 - Placeholder logging/build-metadata runtime to a shared Rust library, direct CLI, C ABI, and AppKit/SwiftUI menu-bar app over the Apple Silicon DDC/CI transport.
 
 The migration preserves the workspace-first ownership model: runnable code remains under `apps/`, maintenance TypeScript remains under `scripts/`, and `packages/` remains reserved for actual reuse.
@@ -36,7 +36,7 @@ That replacement changes the risk profile: product correctness now depends on co
 
 ## Release Reconciliation
 
-`.github/workflows/release.yml` now validates an annotated stable tag against canonical `main`, builds and notarizes `DeskHelm.app` on Apple Silicon, signs the release archive for its Sparkle appcast, validates a private GitHub draft, and then publishes the three macOS release assets. Linux/Windows CLI archives and crates.io publication are no longer part of the release.
+`.github/workflows/release.yml` now validates an annotated stable tag against canonical `main`, builds and signs `DeskHelm.app` on Apple Silicon with the project's free Apple Development certificate, signs the release archive for its Sparkle appcast, validates a private GitHub draft, and then publishes the three macOS release assets. The app uses Hardened Runtime without notarization. Linux/Windows CLI archives and crates.io publication are no longer part of the release.
 
 Any future package rename must update the app directory and manifest, root metadata and lockfiles, README commands, workflow and release-script selectors, executable/archive/appcast names, and owning OpenWiki pages as one change. See [Operations](operations.md#release-pipeline) for the current exact flow.
 

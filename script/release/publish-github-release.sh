@@ -7,6 +7,7 @@ ARCHIVE_NAME="deskhelm-aarch64-apple-darwin.zip"
 APPCAST_NAME="appcast.xml"
 CHECKSUM_NAME="${ARCHIVE_NAME}.sha256"
 API_VERSION="2026-03-10"
+DEFAULT_SPARKLE_PUBLIC_KEY_FILE="$ROOT_DIR/script/release/sparkle-public-ed-key.txt"
 
 required_values=(
 	GH_TOKEN
@@ -15,7 +16,6 @@ required_values=(
 	DESKHELM_RELEASE_COMMIT
 	DESKHELM_RELEASE_TAG
 	DESKHELM_RELEASE_VERSION
-	DESKHELM_SPARKLE_PUBLIC_ED_KEY
 	DESKHELM_SPARKLE_VERSION
 )
 for required_value in "${required_values[@]}"; do
@@ -52,7 +52,22 @@ for executable in "$gh_bin" "$python_bin" "$artifact_validator"; do
 	fi
 done
 
-"$python_bin" - "$DESKHELM_SPARKLE_PUBLIC_ED_KEY" <<'PY'
+sparkle_public_key_file="${DESKHELM_SPARKLE_PUBLIC_KEY_FILE:-$DEFAULT_SPARKLE_PUBLIC_KEY_FILE}"
+if [[ ! -f "$sparkle_public_key_file" ]]; then
+	echo "error: Sparkle public key file does not exist: $sparkle_public_key_file" >&2
+	exit 1
+fi
+sparkle_public_key="$("$python_bin" - "$sparkle_public_key_file" <<'PY'
+from pathlib import Path
+import sys
+
+value = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+if not value:
+	raise SystemExit("error: Sparkle public key file is empty")
+print(value)
+PY
+)"
+"$python_bin" - "$sparkle_public_key" <<'PY'
 import base64
 import binascii
 import sys
@@ -60,10 +75,10 @@ import sys
 try:
 	public_key = base64.b64decode(sys.argv[1], validate=True)
 except (ValueError, binascii.Error) as error:
-	raise SystemExit(f"error: DESKHELM_SPARKLE_PUBLIC_ED_KEY is not valid base64: {error}")
+	raise SystemExit(f"error: Sparkle public key file is not valid base64: {error}")
 if len(public_key) != 32:
 	raise SystemExit(
-		"error: DESKHELM_SPARKLE_PUBLIC_ED_KEY must decode to a 32-byte Ed25519 key"
+		"error: Sparkle public key file must decode to a 32-byte Ed25519 key"
 	)
 PY
 
@@ -226,7 +241,7 @@ validate_artifacts() {
 		--release-json "$release_json" \
 		--release-state "$release_state" \
 		--repository "$GITHUB_REPOSITORY" \
-		--sparkle-public-key "$DESKHELM_SPARKLE_PUBLIC_ED_KEY" \
+		--sparkle-public-key "$sparkle_public_key" \
 		--sparkle-version "$DESKHELM_SPARKLE_VERSION" \
 		--tag "$DESKHELM_RELEASE_TAG" \
 		--version "$DESKHELM_RELEASE_VERSION" \
@@ -250,8 +265,8 @@ for asset_name in "$ARCHIVE_NAME" "$APPCAST_NAME" "$CHECKSUM_NAME"; do
 done
 
 if [[ "$release_state" == "published" ]]; then
-	# A retry rebuild has new signing timestamps and ZIP metadata. Validate the immutable public
-	# bytes directly instead of comparing them with the new local package.
+	# A retry rebuild can produce different ZIP metadata. Validate the immutable public bytes
+	# directly instead of comparing them with the new local package.
 	validate_artifacts "$remote_dir"
 fi
 

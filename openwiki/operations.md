@@ -1,7 +1,7 @@
 ---
 type: Operations Runbook
 title: DeskHelm Operations and Validation
-description: Documents DeskHelm Rust and Swift builds, native diagnostics, validation and CI, plus source-validated Developer ID signing, notarization, Sparkle-signed archive metadata, and draft-first GitHub release publication.
+description: Documents DeskHelm Rust and Swift builds, native diagnostics, validation and CI, plus source-validated Apple Development signing, Sparkle-signed archive metadata, and draft-first GitHub release publication.
 tags: [deskhelm, operations, swiftpm, ci, release]
 ---
 
@@ -111,9 +111,9 @@ The repository-owned SwiftPM entrypoint builds the Rust static library, links th
 
 The script uses `DESKHELM_CONFIGURATION=debug` by default; set it to `release` for Cargo and Swift release builds. It exports `DESKHELM_RUST_LIB_DIR` as `target/<configuration>` so `apps/deskhelm/macos/Package.swift` can link `libdeskhelm`. The staged short version defaults to the workspace package version; `DESKHELM_APP_VERSION` and `DESKHELM_BUILD_VERSION` can supply validated release metadata. `DESKHELM_APP_STAGE_DIR` can redirect staging only to a child of an existing `RUNNER_TEMP`, keeping release work in ephemeral storage. Swift build, test, and binary-path queries receive explicit `-platform_version macos` linker arguments with deployment minimum 14.0 and the SDK version selected by `xcrun`; after an app build, `vtool` must report that same linked SDK or the script fails. This avoids SwiftPM's swiftbuild backend recording the deployment target as both build-version values, which would lose current linked-on UI behavior.
 
-Every non-test mode stages `DeskHelm.app` under `apps/deskhelm/macos/dist/` by default, including `--build-only`. The staged bundle contains executable `DeskHelmMac`, bundle ID `com.acgbox.deskhelm`, macOS 14 minimum, `LSUIElement=true`, and the exact SwiftPM Sparkle 2.9.4 framework from the selected binary directory under `Contents/Frameworks`; the script rejects a framework version that differs from `Package.resolved`. Staging removes development-only rpaths, adds `@executable_path/../Frameworks` when missing, and delegates inside-out signing of known Sparkle nested code to `script/release/sign-macos-app.sh`. Development signing is ad hoc by default; `DESKHELM_CODE_SIGN_IDENTITY` selects an authorized Apple Development identity when Accessibility authorization must persist across rebuilds. The release path invokes the same signer in hardened-runtime Developer ID mode.
+Every non-test mode stages `DeskHelm.app` under `apps/deskhelm/macos/dist/` by default, including `--build-only`. The staged bundle contains executable `DeskHelmMac`, bundle ID `com.acgbox.deskhelm`, macOS 14 minimum, `LSUIElement=true`, and the exact SwiftPM Sparkle 2.9.4 framework from the selected binary directory under `Contents/Frameworks`; the script rejects a framework version that differs from `Package.resolved`. Staging removes development-only rpaths, adds `@executable_path/../Frameworks` when missing, and delegates inside-out signing of known Sparkle nested code to `script/release/sign-macos-app.sh`. Development signing is ad hoc by default; `DESKHELM_CODE_SIGN_IDENTITY` selects an authorized Apple Development identity when Accessibility authorization must persist across rebuilds. The release path invokes the same signer in Hardened Runtime Apple Development mode with `--timestamp=none`.
 
-`DESKHELM_SPARKLE_APPCAST_URL` and `DESKHELM_SPARKLE_PUBLIC_ED_KEY` are optional staging inputs and must be supplied together. When present, the script adds the HTTPS feed, Ed25519 public key, daily checks, and automatic-update capability to `Info.plist`; `SoftwareUpdater` still validates the feed URL and requires a base64-decoded 32-byte public key before enabling Sparkle. When absent, the app labels the action **View Releases…** and opens GitHub Releases. These values are release configuration, not source defaults. This local development bundle remains separate from the signed and notarized app archive produced by the release workflow.
+`DESKHELM_SPARKLE_APPCAST_URL` and `DESKHELM_SPARKLE_PUBLIC_ED_KEY` are optional staging inputs and must be supplied together. When present, the script adds the HTTPS feed, Ed25519 public key, daily checks, and automatic-update capability to `Info.plist`; `SoftwareUpdater` still validates the feed URL and requires a base64-decoded 32-byte public key before enabling Sparkle. When absent, the app labels the action **View Releases…** and opens GitHub Releases. These values are release configuration, not source defaults. The release packager reads the public key from `script/release/sparkle-public-ed-key.txt` and supplies it to staging. This local development bundle remains separate from the signed app archive produced by the release workflow.
 
 ```mermaid
 flowchart TD
@@ -183,14 +183,13 @@ Sources: `README.md`, `Cargo.toml`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/s
 
 Current `.github/workflows/language.yml` runs on pushes and pull requests targeting `main`, plus merge queues. It has no path filters, so documentation-only changes trigger the language checks too.
 
-Four jobs run independently:
+Three Linux jobs run independently:
 
-- **Rust check:** rustfmt check → Cargo check → vstyle action → Clippy → nextest. The setup action reads the ordinary toolchain and Clippy component from `rust-toolchain.toml`; the job installs nightly rustfmt with the minimal profile, installs cargo-make and nextest separately, and gets vstyle from `acg-box/vibe-style`.
-- **Swift check:** on `macos-26`, prints the Apple toolchain, installs Rust and cargo-make, then runs `check-swift`, `test-swift`, and the credential-free `test-release` self-check.
+- **Rust and release check:** rustfmt check → Cargo check → vstyle action → Clippy → nextest → credential-free release self-check. The setup action reads the ordinary toolchain and Clippy component from `rust-toolchain.toml`; the job installs nightly rustfmt with the minimal profile, installs cargo-make and nextest separately, and gets vstyle from `acg-box/vibe-style`.
 - **TOML check:** installs cargo-make and Taplo, then runs `fmt-toml-check`.
 - **TypeScript check:** reads the exact Node.js version from `.node-version`, installs the locked npm graph without lifecycle scripts, then runs TypeScript format, compiler, type-aware lint, and test tasks through cargo-make.
 
-The language workflow does **not** invoke `cargo make check` as one command or validate OpenWiki. Running on a documentation-only diff proves only its listed Rust, Swift, release-contract, TOML, and TypeScript checks. The former CodeQL workflow has been removed, so no tracked workflow currently provides that security-analysis coverage. Actions in the language and release workflows are SHA-pinned. Dependabot covers Cargo, root npm, and GitHub Actions.
+The language workflow does **not** invoke `cargo make check` as one command, build the Swift app, or validate OpenWiki. Running on a documentation-only diff proves only its listed Rust, release-contract, TOML, and TypeScript checks. Swift build and test coverage runs in the tag-triggered macOS release job and in local macOS validation. The former CodeQL workflow has been removed, so no tracked workflow currently provides that security-analysis coverage. Actions in the language and release workflows are SHA-pinned. Dependabot covers Cargo, root npm, and GitHub Actions.
 
 Source: `.github/workflows/language.yml`.
 
@@ -203,29 +202,28 @@ flowchart TD
     Tag["Push annotated vX.Y.Z tag"] --> Source["Validate repository, tag, versions, and main ancestry"]
     Source --> Mac["macos-26 ARM64 release tests"]
     Mac --> Build["Build versioned app in temporary staging"]
-    Build --> Sign["Sign nested Sparkle code and app with Developer ID"]
-    Sign --> Notary["Submit, wait, staple, and assess notarization"]
-    Notary --> Assets["Create ZIP, appcast with archive signature, and SHA-256 checksum"]
+    Build --> Sign["Sign nested Sparkle code and app with Apple Development"]
+    Sign --> Assets["Create ZIP, appcast with archive signature, and SHA-256 checksum"]
     Assets --> Draft["Upload and validate private GitHub draft"]
     Draft --> Recheck["Recheck remote tag and main ancestry"]
     Recheck --> Publish["Publish with semantic-version latest selection"]
 ```
 
-The release moves from immutable source validation through Apple trust checks to draft-first publication; any failure before the final publish operation leaves no new public release.
+The release moves from immutable source validation through Apple Development signing checks to draft-first publication; any failure before the final publish operation leaves no new public release.
 
-The macOS job runs `cargo make test-macos-release`, then `script/release/package-macos.sh` on an ARM64 `macos-26` runner. It builds before writing credentials to disk, stages only inside `RUNNER_TEMP`, verifies the app's version, update key, canonical feed, and embedded Sparkle 2.9.4 layout, then imports the Developer ID certificate into a temporary keychain. `sign-macos-app.sh` signs the known Sparkle code graph inside-out with hardened runtime and secure timestamps, rejecting ad hoc signatures, team mismatches, missing timestamps, and unsafe outer entitlements.
+The macOS job runs `cargo make test-macos-release`, then `script/release/package-macos.sh` on an ARM64 `macos-26` runner. It builds before writing credentials to disk, stages only inside `RUNNER_TEMP`, verifies the app's version, checked-in update key, canonical feed, and embedded Sparkle 2.9.4 layout, then imports the Apple Development certificate into a temporary keychain. The release path pins Personal Team `RD3D4LH465`. `sign-macos-app.sh` signs the known Sparkle code graph inside-out with Hardened Runtime and `--timestamp=none`, rejecting ad hoc signatures, any other Apple team, timestamps, and unsafe outer entitlements.
 
-Packaging submits a temporary archive to Apple notarization, waits up to 30 minutes, requires an accepted result, staples the ticket, and passes `codesign`, stapler, and Gatekeeper assessment before creating the public ZIP. `sparkle-appcast.sh` signs that exact ZIP with DeskHelm's private Ed25519 key and emits an ARM64, macOS 14 appcast entry. The final artifact set is exactly:
+Packaging validates the complete signature graph with `codesign` before creating the public ZIP. It does not submit to Apple notarization, staple a ticket, or use Gatekeeper acceptance as a success condition. `sparkle-appcast.sh` signs that exact ZIP with DeskHelm's private Ed25519 key and emits an ARM64, macOS 14 appcast entry. The final artifact set is exactly:
 
 - `deskhelm-aarch64-apple-darwin.zip` containing `DeskHelm.app`
 - `appcast.xml` for the in-app Sparkle feed
 - `deskhelm-aarch64-apple-darwin.zip.sha256`
 
-The Linux publisher has the workflow's only `contents: write` permission. Concurrency is isolated by tag, so a later version cannot replace another version's pending run; repeated runs for one tag share that tag's group. The publisher creates or reuses a draft, uploads only those three assets, validates metadata, checksum, archive contents, appcast URLs and signature, downloads the assets to compare their bytes, and rechecks the remote annotated tag and `main` ancestry immediately before setting `draft=false`. The final call asks GitHub to select the latest release by its semantic-version and creation-date policy, so a delayed older tag does not replace a newer update feed. A retry against an existing public release validates its immutable downloaded bytes rather than comparing a newly timestamped build. Failures before publication can leave a private draft for a retry, while package cleanup removes partial local assets and temporary credentials. The final publish API call is intentionally last; a retry safely validates an already-published release if that call's network result was ambiguous.
+The Linux publisher has the workflow's only `contents: write` permission. Concurrency is isolated by tag, so a later version cannot replace another version's pending run; repeated runs for one tag share that tag's group. The publisher creates or reuses a draft, uploads only those three assets, validates metadata, checksum, archive contents, appcast URLs and signature, downloads the assets to compare their bytes, and rechecks the remote annotated tag and `main` ancestry immediately before setting `draft=false`. The final call asks GitHub to select the latest release by its semantic-version and creation-date policy, so a delayed older tag does not replace a newer update feed. A retry against an existing public release validates its immutable downloaded bytes rather than comparing them with a rebuilt archive whose build or ZIP metadata can differ. Failures before publication can leave a private draft for a retry, while package cleanup removes partial local assets and temporary credentials. The final publish API call is intentionally last; a retry safely validates an already-published release if that call's network result was ambiguous.
 
-Configure the protected `release` environment with public variable `DESKHELM_SPARKLE_PUBLIC_ED_KEY` and secrets `DESKHELM_SPARKLE_PRIVATE_ED_KEY`, `APPLE_DEVELOPER_ID_APPLICATION_IDENTITY`, `APPLE_DEVELOPER_ID_APPLICATION_P12_BASE64`, `APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD`, `APPLE_NOTARY_ISSUER_ID`, `APPLE_NOTARY_KEY_ID`, and `APPLE_NOTARY_KEY_P8`. DeskHelm forbids the generic `SPARKLE_PRIVATE_ED_KEY` name to reduce accidental key reuse. Do not put credential values in source or documentation.
+The checked-in `script/release/sparkle-public-ed-key.txt` contains DeskHelm's public Sparkle key. Configure the matching private key as the DeskHelm repository secret `DESKHELM_SPARKLE_PRIVATE_ED_KEY`. Make organization secrets `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, and `APPLE_SIGNING_IDENTITY` available to this repository. The Apple identity must start with `Apple Development:` and belong to Personal Team `RD3D4LH465`. DeskHelm forbids the generic `SPARKLE_PRIVATE_ED_KEY` name to reduce accidental key reuse. Only the final Linux publisher uses the protected `release` environment. Do not put private credential values in source or documentation.
 
-This pipeline publishes only the signed and notarized Apple Silicon app. It no longer emits Windows/Linux CLI archives and does not publish the Rust crate. Hardware operation still depends on the compatible display path in [Architecture and Runtime](architecture-and-runtime.md#lg-39gx950b-usb-c-boundary).
+This pipeline publishes only the Apple Development-signed Apple Silicon app. The app is not notarized. On first launch, macOS can block it; the user must open **System Settings > Privacy & Security**, select **Open Anyway** for DeskHelm, then confirm **Open**. It no longer emits Windows/Linux CLI archives and does not publish the Rust crate. Hardware operation still depends on the compatible display path in [Architecture and Runtime](architecture-and-runtime.md#lg-39gx950b-usb-c-boundary).
 
 Run the credential-free contract suite before changing the workflow or release scripts:
 
@@ -233,7 +231,7 @@ Run the credential-free contract suite before changing the workflow or release s
 cargo make test-release
 ```
 
-It exercises source/version rejection, signing order and metadata, appcast and artifact validation, notarization outcomes, draft/public retry paths, moved tags, corrupt assets, and shell/Python static checks with fixtures and stubs. It does not perform real Developer ID signing, Apple notarization, or live GitHub publication.
+It exercises source/version rejection, signing order and metadata, appcast and artifact validation, draft/public retry paths, moved tags, corrupt assets, and shell/Python static checks with fixtures and stubs. It does not perform real Apple Development signing or live GitHub publication.
 
 Sources: `.github/workflows/release.yml`, `Makefile.toml`, `script/build_and_run.sh`, `script/release/`, `Cargo.toml`, `Cargo.lock`, `apps/deskhelm/macos/Package.swift`, `apps/deskhelm/macos/Package.resolved`.
 
@@ -246,6 +244,6 @@ Sources: `.github/workflows/release.yml`, `Makefile.toml`, `script/build_and_run
 - Clippy/vstyle failure: fix directly or use the matching `lint-fix*` task, then review all mutations before rerunning read-only gates.
 - Oxlint failure: fix the diagnostic directly or use `lint-fix-typescript` for safe fixes only; review every mutation before rerunning compiler, lint, and tests.
 - Test failure: treat as a regression or broken assumption in the current diff until evidence shows an environment/tool issue.
-- Release failure: distinguish source validation, release-mode tests/build, signing, notarization, appcast/artifact validation, draft upload, and final publication. Before the final API operation, retries may reuse and repair a private draft; a public release retry validates the existing remote bytes.
+- Release failure: distinguish source validation, release-mode tests/build, signing, appcast/artifact validation, draft upload, and final publication. Before the final API operation, retries may reuse and repair a private draft; a public release retry validates the existing remote bytes.
 
 Before merge, prefer `cargo make check` plus the focused OpenWiki drift checks and any release-specific contract checks justified by the changed surface. Record unavailable tools and unrun checks explicitly rather than claiming readiness.
