@@ -30,7 +30,9 @@ package struct VolumeLevelPresentation: Equatable, Sendable {
   }
 
   package var rollingDigits: [VolumeLevelRollingDigitPresentation] {
-    let digitCount = String(Int(maximum.rounded(.down))).count
+    let digitCount = decimalDigitCount(
+      for: Int(maximum.rounded(.down))
+    )
     let lowerDigits = digits(for: lowerLevel, count: digitCount)
     let upperDigits = digits(for: upperLevel, count: digitCount)
 
@@ -46,12 +48,29 @@ package struct VolumeLevelPresentation: Equatable, Sendable {
     for value: Int,
     count: Int
   ) -> [Int?] {
-    let valueDigits = String(value).compactMap(\.wholeNumberValue)
-    let padding = [Int?](
-      repeating: nil,
-      count: max(count - valueDigits.count, 0)
-    )
-    return padding + valueDigits.map(Optional.some)
+    var digits = [Int?](repeating: nil, count: count)
+    var remaining = max(value, 0)
+    var index = count - 1
+
+    repeat {
+      digits[index] = remaining % 10
+      remaining /= 10
+      index -= 1
+    } while remaining > 0 && index >= 0
+
+    return digits
+  }
+
+  private func decimalDigitCount(for value: Int) -> Int {
+    var remaining = max(value, 0)
+    var count = 1
+
+    while remaining >= 10 {
+      remaining /= 10
+      count += 1
+    }
+
+    return count
   }
 }
 

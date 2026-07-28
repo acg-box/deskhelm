@@ -4,15 +4,15 @@ import Testing
 
 @Suite("Application launch plan")
 struct DeskHelmLaunchPlanTests {
-  @Test("A normal launch restores requested volume keys")
+  @Test("A normal launch starts volume keys")
   func normalLaunch() {
     #expect(
       DeskHelmLaunchPlan.actions(arguments: ["/Applications/DeskHelm.app"])
-        == [.restoreRequestedVolumeKeys]
+        == [.startVolumeKeys]
     )
   }
 
-  @Test("Settings verification also restores requested volume keys")
+  @Test("Settings verification also starts volume keys")
   func settingsVerificationLaunch() {
     #expect(
       DeskHelmLaunchPlan.actions(
@@ -22,7 +22,7 @@ struct DeskHelmLaunchPlanTests {
         ]
       )
         == [
-          .restoreRequestedVolumeKeys,
+          .startVolumeKeys,
           .showSettingsForVerification,
         ]
     )

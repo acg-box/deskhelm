@@ -5,37 +5,36 @@ import Testing
 @MainActor
 @Suite("Volume-key feature state")
 struct VolumeKeyFeatureStateTests {
-  @Test("Requested state stays on while enablement is in progress")
-  func requestedState() {
+  @Test("Only the enabled phase claims active interception")
+  func enabledState() {
     let state = VolumeKeyFeatureState()
 
-    #expect(!state.isRequested)
     #expect(!state.isEnabled)
 
     state.update(to: .enabling)
-    #expect(state.isRequested)
     #expect(!state.isEnabled)
 
     state.update(to: .enabled)
-    #expect(state.isRequested)
     #expect(state.isEnabled)
 
     state.update(to: .unavailable("Waiting for the display."))
-    #expect(state.isRequested)
     #expect(!state.isEnabled)
   }
 
-  @Test("Permission and failure states do not claim active interception")
+  @Test("Permission and failure states explain why interception is inactive")
   func blockedStates() {
     let state = VolumeKeyFeatureState()
 
     state.update(to: .permissionRequired)
-    #expect(!state.isRequested)
     #expect(!state.isEnabled)
+    #expect(
+      state.statusMessage
+        == "Volume keys start automatically after Accessibility access is granted."
+    )
 
     state.update(to: .failed("Communication failed."))
-    #expect(!state.isRequested)
     #expect(!state.isEnabled)
+    #expect(state.statusMessage == "Communication failed.")
   }
 
   @Test("Cancel invalidates an in-flight enable request")

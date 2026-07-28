@@ -7,8 +7,6 @@ import SwiftUI
 protocol VolumeKeyAccessibilityProviding: AnyObject {
   var isGranted: Bool { get }
   @discardableResult
-  func request(prompt: Bool) -> AccessibilityPermissionState
-  @discardableResult
   func refresh() -> AccessibilityPermissionState
 }
 
@@ -53,7 +51,7 @@ final class VolumeKeyController {
   private var enableTask: Task<Void, Never>?
   private var recoveryTask: Task<Void, Never>?
   private var isDisplayObservationStarted = false
-  private var shouldRequestPermissionOnNextEnable = false
+  private var isStarted = false
   private var shouldPresentHUD: @MainActor () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = monitorFactory(
@@ -118,22 +116,10 @@ final class VolumeKeyController {
     }
   }
 
-  func restoreIfRequested() {
-    guard UserDefaults.standard.bool(forKey: Self.preferenceKey) else {
-      state.update(to: .disabled)
-      return
-    }
-
-    requestEnable(requestPermission: false)
-  }
-
-  func setEnabled(_ isEnabled: Bool) {
-    if !isEnabled {
-      disable()
-      return
-    }
-
-    requestEnable(requestPermission: true)
+  func start() {
+    guard !isStarted else { return }
+    isStarted = true
+    requestEnable()
   }
 
   func setHUDPresentationPolicy(
@@ -142,25 +128,40 @@ final class VolumeKeyController {
     shouldPresentHUD = policy
   }
 
+  func accessibilityPermissionDidChange(
+    _ permissionState: AccessibilityPermissionState
+  ) {
+    guard isStarted else { return }
+
+    switch permissionState {
+    case .granted:
+      requestEnable()
+    case .required:
+      suspendForMissingPermission()
+    }
+  }
+
   func dismissHUD() {
     hud.invalidate()
   }
 
   func invalidate() {
+    isStarted = false
     cancelPendingEnable()
     cancelRecovery()
     feedbackCoordinator.cancel()
     monitor.stop()
     displayReconfigurationMonitor.stop()
     isDisplayObservationStarted = false
-    shouldRequestPermissionOnNextEnable = false
     hud.invalidate()
     lastLevelUpdateUptime = nil
     store.communicationFailureHandler = nil
+    state.update(to: .disabled)
   }
 
-  private func requestEnable(requestPermission: Bool) {
+  private func requestEnable() {
     guard
+      isStarted,
       !enableRequestState.hasActiveRequest,
       !monitor.isRunning,
       !state.isEnabled
@@ -171,14 +172,10 @@ final class VolumeKeyController {
     do {
       try startDisplayObservation()
     } catch {
-      failAndDisable(error.localizedDescription)
+      failAndStop(error.localizedDescription)
       return
     }
 
-    if requestPermission {
-      shouldRequestPermissionOnNextEnable = true
-    }
-    UserDefaults.standard.set(true, forKey: Self.preferenceKey)
     state.update(to: .enabling)
     let token = enableRequestState.begin()
     enableTask = Task { @MainActor [weak self] in
@@ -190,6 +187,12 @@ final class VolumeKeyController {
   }
 
   private func enable(token: VolumeKeyEnableRequestState.Token) async {
+    guard accessibilityPermission.refresh() == .granted else {
+      suspendForMissingPermission()
+      return
+    }
+
+    guard isCurrentEnable(token) else { return }
     let displayIsReady = await ensureDisplayIsReady()
     guard isCurrentEnable(token) else { return }
 
@@ -201,49 +204,29 @@ final class VolumeKeyController {
       return
     }
 
-    if !accessibilityPermission.isGranted,
-      shouldRequestPermissionOnNextEnable
-    {
-      accessibilityPermission.request(prompt: true)
-    }
-
-    guard isCurrentEnable(token) else { return }
-    guard accessibilityPermission.refresh() == .granted else {
-      cancelRecovery()
-      shouldRequestPermissionOnNextEnable = false
-      UserDefaults.standard.set(false, forKey: Self.preferenceKey)
-      state.update(to: .permissionRequired)
-      return
-    }
-
-    guard isCurrentEnable(token) else { return }
     do {
       try monitor.start()
       guard isCurrentEnable(token) else {
         monitor.stop()
         return
       }
-      UserDefaults.standard.set(true, forKey: Self.preferenceKey)
       state.update(to: .enabled)
-      shouldRequestPermissionOnNextEnable = false
       cancelRecovery()
       logger.notice("Keyboard volume control enabled.")
     } catch {
-      failAndDisable(error.localizedDescription)
+      failAndStop(error.localizedDescription)
     }
   }
 
-  private func disable() {
+  private func suspendForMissingPermission() {
     cancelPendingEnable()
     cancelRecovery()
-    shouldRequestPermissionOnNextEnable = false
     feedbackCoordinator.cancel()
     monitor.stop()
     hud.invalidate()
     lastLevelUpdateUptime = nil
-    UserDefaults.standard.set(false, forKey: Self.preferenceKey)
-    state.update(to: .disabled)
-    logger.notice("Keyboard volume control disabled.")
+    state.update(to: .permissionRequired)
+    logger.notice("Keyboard volume control is waiting for Accessibility.")
   }
 
   private func cancelPendingEnable() {
@@ -365,7 +348,11 @@ final class VolumeKeyController {
     case .settled:
       store.displayConnectionDidSettle()
     }
-    guard UserDefaults.standard.bool(forKey: Self.preferenceKey) else {
+    guard isStarted else {
+      return
+    }
+    guard accessibilityPermission.isGranted else {
+      suspendForMissingPermission()
       return
     }
 
@@ -393,7 +380,6 @@ final class VolumeKeyController {
     feedbackCoordinator.cancel()
     monitor.stop()
     lastLevelUpdateUptime = nil
-    UserDefaults.standard.set(true, forKey: Self.preferenceKey)
     state.update(to: .unavailable(message))
     if showHUD && shouldPresentHUD() {
       hud.show(error: message)
@@ -420,13 +406,13 @@ final class VolumeKeyController {
       }
       guard
         !Task.isCancelled,
-        UserDefaults.standard.bool(forKey: Self.preferenceKey)
+        isStarted
       else {
         return
       }
 
       recoveryTask = nil
-      requestEnable(requestPermission: false)
+      requestEnable()
     }
   }
 
@@ -442,22 +428,18 @@ final class VolumeKeyController {
     isDisplayObservationStarted = true
   }
 
-  private func failAndDisable(_ message: String) {
+  private func failAndStop(_ message: String) {
     cancelPendingEnable()
     cancelRecovery()
-    shouldRequestPermissionOnNextEnable = false
     feedbackCoordinator.cancel()
     monitor.stop()
     lastLevelUpdateUptime = nil
-    UserDefaults.standard.set(false, forKey: Self.preferenceKey)
     state.update(to: .failed(message))
     if shouldPresentHUD() {
       hud.show(error: message)
     }
     logger.error("Keyboard volume control stopped: \(message, privacy: .public)")
   }
-
-  private static let preferenceKey = "VolumeKeysRequested"
 }
 
 extension AccessibilityPermission: VolumeKeyAccessibilityProviding {}

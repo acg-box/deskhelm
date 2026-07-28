@@ -75,11 +75,14 @@ cargo build --locked -p deskhelm
 
 ### Configuration
 
-#### Optional Volume Keys
+#### Keyboard Volume Keys
 
-Open **Settings > Volume Keys**. You can request Accessibility access, open the
-correct macOS settings page, or drag the DeskHelm app chip into the
-Accessibility application list. Then enable **Keyboard Volume Control**.
+Keyboard volume control starts automatically. If Accessibility access is
+missing, open **Settings > Volume Keys** and select **Grant**. DeskHelm
+opens the correct macOS settings page and shows a floating guide with a
+draggable app chip. It does not request the native macOS Accessibility prompt.
+The guide closes when you close DeskHelm Settings. After you grant access,
+DeskHelm starts volume-key interception automatically.
 
 DeskHelm intercepts volume-up and volume-down only when the current output
 uniquely matches the supported LG display. macOS classifies this USB-C audio
@@ -98,10 +101,8 @@ does. A failed write or output-route change stays silent.
 
 During display reconfiguration or a temporary DDC/CI failure, DeskHelm stops
 interception and cancels queued display work, so volume keys return to macOS. It
-keeps the enabled preference and discards the old display session. After the
-connection settles, it discovers the display again, uses bounded fresh reads,
-and restores interception. Turning **Keyboard Volume Control** off cancels this
-recovery, including while a recovery read is in progress.
+discards the old display session. After the connection settles, it discovers the
+display again, uses bounded fresh reads, and restores interception.
 
 Open **Settings > General** to enable launch at login. The About pane shows the
 current update configuration. A source build without a signed Sparkle appcast

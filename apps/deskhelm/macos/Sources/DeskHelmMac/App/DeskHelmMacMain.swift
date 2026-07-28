@@ -84,8 +84,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
       for action in launchActions {
         switch action {
-        case .restoreRequestedVolumeKeys:
-          volumeKeyController.restoreIfRequested()
+        case .startVolumeKeys:
+          volumeKeyController.start()
         case .showSettingsForVerification:
           Task { @MainActor [weak self] in
             await Task.yield()

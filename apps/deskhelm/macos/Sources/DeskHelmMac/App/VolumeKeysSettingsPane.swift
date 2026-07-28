@@ -5,104 +5,119 @@ import SwiftUI
 struct VolumeKeysSettingsPane: View {
   @Bindable private var state: VolumeKeyFeatureState
   @Bindable private var permission: AccessibilityPermission
-  private let controller: VolumeKeyController
+  private let presentPermissionGuide: @MainActor () -> Void
 
   init(
     state: VolumeKeyFeatureState,
     permission: AccessibilityPermission,
-    controller: VolumeKeyController
+    presentPermissionGuide: @escaping @MainActor () -> Void
   ) {
     self.state = state
     self.permission = permission
-    self.controller = controller
+    self.presentPermissionGuide = presentPermissionGuide
   }
 
   var body: some View {
     Section {
       SettingsRow(
-        symbolName: "keyboard",
-        title: "Keyboard Volume Control",
-        subtitle: "Intercept volume keys only while LG is the audio output."
+        symbolName: statusSymbolName,
+        title: statusTitle,
+        subtitle: statusDescription
       ) {
-        Toggle(
-          "",
-          isOn: Binding(
-            get: { state.isRequested },
-            set: { controller.setEnabled($0) }
-          )
-        )
-        .labelsHidden()
-        .accessibilityLabel("Keyboard volume control")
-      }
-
-      if let message = state.statusMessage {
-        Label(message, systemImage: "info.circle")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      HStack(spacing: 10) {
-        Image(
-          systemName: permission.isGranted
-            ? "checkmark.circle.fill"
-            : "exclamationmark.circle"
-        )
-        .foregroundStyle(permission.isGranted ? Color.green : Color.secondary)
-
-        Text(
-          permission.isGranted
-            ? "Accessibility access is ready"
-            : "Accessibility access is required"
-        )
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-
-        Spacer()
-
-        if !permission.isGranted {
-          Button("Request Access") {
-            permission.request(prompt: true)
-          }
-          .controlSize(.small)
-
-          Button("Open Settings") {
-            permission.openSystemSettings()
-          }
-          .controlSize(.small)
-        }
-      }
-
-      if !permission.isGranted {
-        HStack(spacing: 8) {
-          if Bundle.main.bundleURL.pathExtension.lowercased() == "app" {
-            PermissionAppDragSource()
-              .fixedSize()
-          }
-
-          Text("Drag DeskHelm into Accessibility if macOS does not add it.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-          Spacer()
-
-          Button {
-            permission.refresh()
-          } label: {
-            Image(systemName: "arrow.clockwise")
-          }
-          .controlSize(.small)
-          .help("Refresh Accessibility permission")
-          .accessibilityLabel("Refresh Accessibility permission")
-        }
+        statusControl
       }
     } header: {
       Text("Volume Keys")
     } footer: {
       Text(
-        "DeskHelm reads media-key events only. Non-LG audio outputs pass "
-          + "through to macOS."
+        "DeskHelm intercepts volume keys only while the matching LG display "
+          + "is the audio output. Other outputs pass through to macOS."
       )
+    }
+  }
+
+  private var needsAccessibilityAccess: Bool {
+    !permission.isGranted || state.phase == .permissionRequired
+  }
+
+  private var statusSymbolName: String {
+    if needsAccessibilityAccess {
+      return "accessibility"
+    }
+
+    switch state.phase {
+    case .disabled, .enabling:
+      return "keyboard"
+    case .permissionRequired:
+      return "accessibility"
+    case .enabled:
+      return "keyboard.fill"
+    case .unavailable:
+      return "pause.circle"
+    case .failed:
+      return "exclamationmark.triangle"
+    }
+  }
+
+  private var statusTitle: String {
+    if needsAccessibilityAccess {
+      return "Accessibility Access"
+    }
+
+    switch state.phase {
+    case .disabled, .enabling, .permissionRequired:
+      return "Starting Volume Keys"
+    case .enabled:
+      return "Volume Keys Active"
+    case .unavailable:
+      return "Volume Keys Paused"
+    case .failed:
+      return "Volume Keys Unavailable"
+    }
+  }
+
+  private var statusDescription: String {
+    if needsAccessibilityAccess {
+      return "Required once to control the matching LG display."
+    }
+
+    switch state.phase {
+    case .disabled:
+      return "Preparing keyboard volume control…"
+    case .enabling, .permissionRequired:
+      return "Checking the display connection…"
+    case .enabled:
+      return "Ready for the matching LG audio output."
+    case .unavailable(let message), .failed(let message):
+      return message
+    }
+  }
+
+  @ViewBuilder
+  private var statusControl: some View {
+    if needsAccessibilityAccess {
+      Button("Grant") {
+        presentPermissionGuide()
+      }
+      .buttonStyle(.borderedProminent)
+      .controlSize(.small)
+    } else {
+      switch state.phase {
+      case .disabled, .enabling, .permissionRequired, .unavailable:
+        ProgressView()
+          .controlSize(.small)
+          .accessibilityLabel("Starting volume-key control")
+      case .enabled:
+        Image(systemName: "checkmark.circle.fill")
+          .font(.title3)
+          .foregroundStyle(.green)
+          .accessibilityLabel("Volume keys active")
+      case .failed:
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.title3)
+          .foregroundStyle(.orange)
+          .accessibilityLabel("Volume keys unavailable")
+      }
     }
   }
 }

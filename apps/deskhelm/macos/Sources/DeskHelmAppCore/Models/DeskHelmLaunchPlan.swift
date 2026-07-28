@@ -1,5 +1,5 @@
 package enum DeskHelmLaunchAction: Equatable, Sendable {
-  case restoreRequestedVolumeKeys
+  case startVolumeKeys
   case showSettingsForVerification
 }
 
@@ -8,7 +8,7 @@ package enum DeskHelmLaunchPlan {
     arguments: [String]
   ) -> [DeskHelmLaunchAction] {
     var actions: [DeskHelmLaunchAction] = [
-      .restoreRequestedVolumeKeys
+      .startVolumeKeys
     ]
 
     if arguments.contains("--verify-settings") {

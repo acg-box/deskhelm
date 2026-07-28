@@ -9,18 +9,6 @@ struct VolumeKeyControllerTests {
   @Test("The controller forwards full target events and cancels off route")
   @MainActor
   func forwardsEventsAndCancelsOffRoute() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
     let readGate = AsyncGate()
     await readGate.open()
     let display = StubVolumeController(readGate: readGate)
@@ -47,7 +35,7 @@ struct VolumeKeyControllerTests {
       feedbackCoordinator: feedback
     )
 
-    controller.setEnabled(true)
+    controller.start()
     await waitForEnabled(state)
 
     let press = VolumeMediaKeyEvent(
@@ -89,21 +77,9 @@ struct VolumeKeyControllerTests {
     controller.invalidate()
   }
 
-  @Test("A display failure preserves the requested volume-key control")
+  @Test("A display failure preserves always-on volume-key recovery")
   @MainActor
-  func displayFailurePreservesRequest() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
+  func displayFailurePreservesRecovery() async {
     let readGate = AsyncGate()
     await readGate.open()
     let display = StubVolumeController(readGate: readGate)
@@ -127,13 +103,12 @@ struct VolumeKeyControllerTests {
       automaticRecoveryDelay: .zero
     )
 
-    controller.setEnabled(true)
+    controller.start()
     await waitForEnabled(state)
     store.communicationFailureHandler?("The display connection changed.")
 
-    #expect(state.isRequested)
+    #expect(state.phase == .unavailable("The display connection changed."))
     #expect(!state.isEnabled)
-    #expect(defaults.bool(forKey: preferenceKey))
     #expect(!monitor.isRunning)
     #expect(displayMonitor.isRunning)
 
@@ -145,21 +120,9 @@ struct VolumeKeyControllerTests {
     controller.invalidate()
   }
 
-  @Test("Display reconfiguration rearms a requested monitor with a fresh read")
+  @Test("Display reconfiguration rearms the monitor with a fresh read")
   @MainActor
-  func displayReconfigurationRearmsRequestedMonitor() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
+  func displayReconfigurationRearmsMonitor() async {
     let readGate = AsyncGate()
     await readGate.open()
     let display = StubVolumeController(
@@ -186,14 +149,18 @@ struct VolumeKeyControllerTests {
       automaticRecoveryDelay: .zero
     )
 
-    controller.setEnabled(true)
+    controller.start()
     await waitForEnabled(state)
     displayMonitor.send(.began)
 
-    #expect(state.isRequested)
+    #expect(
+      state.phase
+        == .unavailable(
+          "Waiting for the display connection to settle…"
+        )
+    )
     #expect(!state.isEnabled)
     #expect(!monitor.isRunning)
-    #expect(defaults.bool(forKey: preferenceKey))
 
     await store.refresh()
     #expect(await display.readCount() == 1)
@@ -210,7 +177,6 @@ struct VolumeKeyControllerTests {
     #expect(monitor.startCount == 2)
     #expect(monitor.isRunning)
     #expect(displayMonitor.isRunning)
-    #expect(defaults.bool(forKey: preferenceKey))
 
     controller.invalidate()
   }
@@ -218,18 +184,6 @@ struct VolumeKeyControllerTests {
   @Test("Display reconfiguration cancels a queued volume write")
   @MainActor
   func displayReconfigurationCancelsQueuedWrite() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
     let readGate = AsyncGate()
     await readGate.open()
     let display = StubVolumeController(readGate: readGate)
@@ -253,7 +207,7 @@ struct VolumeKeyControllerTests {
       feedbackCoordinator: StubFeedbackCoordinator()
     )
 
-    controller.setEnabled(true)
+    controller.start()
     await waitForEnabled(state)
     monitor.send(
       VolumeMediaKeyEvent(
@@ -276,18 +230,6 @@ struct VolumeKeyControllerTests {
   @Test("Session reset waits for an in-flight display write")
   @MainActor
   func sessionResetWaitsForInFlightWrite() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
     let readGate = AsyncGate()
     let writeGate = AsyncGate()
     await readGate.open()
@@ -315,7 +257,7 @@ struct VolumeKeyControllerTests {
       feedbackCoordinator: StubFeedbackCoordinator()
     )
 
-    controller.setEnabled(true)
+    controller.start()
     await waitForEnabled(state)
     monitor.send(
       VolumeMediaKeyEvent(
@@ -349,18 +291,6 @@ struct VolumeKeyControllerTests {
   @Test("A pre-reconfiguration read cannot restore stale display state")
   @MainActor
   func staleReadCannotRestoreDisplayState() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
     let readGate = AsyncGate()
     let staleReadGate = AsyncGate()
     await readGate.open()
@@ -385,7 +315,7 @@ struct VolumeKeyControllerTests {
       displayReadRetryDelays: [.zero]
     )
 
-    controller.setEnabled(true)
+    controller.start()
     await waitForEnabled(state)
     let staleRefresh = Task { @MainActor in
       await store.refresh()
@@ -398,7 +328,12 @@ struct VolumeKeyControllerTests {
 
     #expect(store.confirmedLevel == nil)
     #expect(!store.isAdjustable)
-    #expect(state.isRequested)
+    #expect(
+      state.phase
+        == .unavailable(
+          "Waiting for the display connection to settle…"
+        )
+    )
     #expect(!state.isEnabled)
 
     displayMonitor.send(.settled)
@@ -409,21 +344,9 @@ struct VolumeKeyControllerTests {
     controller.invalidate()
   }
 
-  @Test("Disabling during reconfiguration keeps the store gated until settle")
+  @Test("Starting during display reconfiguration waits for settlement")
   @MainActor
-  func disableDuringReconfigurationKeepsStoreGated() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
+  func startDuringReconfigurationWaitsForSettle() async {
     let readGate = AsyncGate()
     await readGate.open()
     let display = StubVolumeController(readGate: readGate)
@@ -440,108 +363,59 @@ struct VolumeKeyControllerTests {
       displayReconfigurationMonitorFactory: { onEvent in
         displayMonitor.configure(onEvent: onEvent)
         return displayMonitor
-      }
-    )
-
-    controller.setEnabled(true)
-    await waitForEnabled(state)
-    displayMonitor.send(.began)
-    controller.setEnabled(false)
-
-    let preSettleRefresh = await store.refresh()
-    #expect(preSettleRefresh == .skipped)
-    #expect(await display.readCount() == 1)
-    #expect(displayMonitor.isRunning)
-    #expect(state.phase == .disabled)
-
-    displayMonitor.send(.settled)
-    let postSettleRefresh = await store.refresh()
-    #expect(postSettleRefresh == .confirmed)
-    #expect(await display.readCount() == 2)
-    #expect(state.phase == .disabled)
-    #expect(!monitor.isRunning)
-
-    controller.invalidate()
-  }
-
-  @Test("Re-enabling during a disabled reconfiguration waits for settle")
-  @MainActor
-  func reenableDuringDisabledReconfigurationWaitsForSettle() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
-    let readGate = AsyncGate()
-    await readGate.open()
-    let display = StubVolumeController(
-      readGate: readGate,
-      failedReadNumbers: [2]
-    )
-    let store = VolumeStore(controller: display)
-    let state = VolumeKeyFeatureState()
-    let permission = StubAccessibilityPermission()
-    let monitor = StubMediaKeyMonitor()
-    let displayMonitor = StubDisplayReconfigurationMonitor()
-    let controller = VolumeKeyController(
-      store: store,
-      state: state,
-      accessibilityPermission: permission,
-      monitorFactory: { _, _ in monitor },
-      displayReconfigurationMonitorFactory: { onEvent in
-        displayMonitor.configure(onEvent: onEvent)
-        return displayMonitor
       },
-      displayReadRetryDelays: [.zero, .milliseconds(50)]
+      displayReadRetryDelays: [.zero]
     )
 
-    controller.setEnabled(true)
-    await waitForEnabled(state)
-    controller.setEnabled(false)
     displayMonitor.send(.began)
-    controller.setEnabled(true)
+    controller.start()
     await waitForReset(display)
     try? await Task.sleep(for: .milliseconds(5))
 
-    #expect(await display.readCount() == 1)
-    #expect(monitor.startCount == 1)
-    #expect(!monitor.isRunning)
+    #expect(!state.isEnabled)
+    #expect(await display.readCount() == 0)
+    #expect(monitor.startCount == 0)
 
     displayMonitor.send(.settled)
     await waitForEnabled(state)
 
-    #expect(
-      await display.operations()
-        == [.read(1), .reset, .read(2), .read(3)]
-    )
-    #expect(monitor.startCount == 2)
+    #expect(await display.operations() == [.reset, .read(1)])
+    #expect(monitor.startCount == 1)
     #expect(monitor.isRunning)
 
     controller.invalidate()
   }
 
-  @Test("Settled recovery preserves a manual permission prompt")
+  @Test("Always-on startup waits silently when Accessibility is missing")
   @MainActor
-  func settledRecoveryPreservesManualPermissionPrompt() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
+  func missingPermissionWaitsSilently() async {
+    let readGate = AsyncGate()
+    let display = StubVolumeController(readGate: readGate)
+    let store = VolumeStore(controller: display)
+    let state = VolumeKeyFeatureState()
+    let permission = StubAccessibilityPermission()
+    permission.isGranted = false
+    let monitor = StubMediaKeyMonitor()
+    let controller = VolumeKeyController(
+      store: store,
+      state: state,
+      accessibilityPermission: permission,
+      monitorFactory: { _, _ in monitor }
+    )
 
-    defaults.set(false, forKey: preferenceKey)
+    controller.start()
+    await waitForPhase(.permissionRequired, state: state)
+
+    #expect(await display.readCount() == 0)
+    #expect(monitor.startCount == 0)
+    #expect(!monitor.isRunning)
+
+    controller.invalidate()
+  }
+
+  @Test("Granting Accessibility automatically starts volume keys")
+  @MainActor
+  func permissionGrantStartsVolumeKeys() async {
     let readGate = AsyncGate()
     await readGate.open()
     let display = StubVolumeController(readGate: readGate)
@@ -550,103 +424,68 @@ struct VolumeKeyControllerTests {
     let permission = StubAccessibilityPermission()
     permission.isGranted = false
     let monitor = StubMediaKeyMonitor()
-    let displayMonitor = StubDisplayReconfigurationMonitor()
     let controller = VolumeKeyController(
       store: store,
       state: state,
       accessibilityPermission: permission,
-      monitorFactory: { _, _ in monitor },
-      displayReconfigurationMonitorFactory: { onEvent in
-        displayMonitor.configure(onEvent: onEvent)
-        return displayMonitor
-      },
-      displayReadRetryDelays: [.zero, .milliseconds(50)]
+      monitorFactory: { _, _ in monitor }
     )
 
-    displayMonitor.send(.began)
-    controller.setEnabled(true)
-    try? await Task.sleep(for: .milliseconds(5))
-    #expect(state.phase == .enabling)
-    #expect(permission.promptCount == 0)
+    controller.start()
+    await waitForPhase(.permissionRequired, state: state)
 
-    displayMonitor.send(.settled)
+    permission.isGranted = true
+    controller.accessibilityPermissionDidChange(.granted)
     await waitForEnabled(state)
 
-    #expect(permission.promptCount == 1)
-    #expect(permission.isGranted)
+    #expect(await display.readCount() == 1)
+    #expect(monitor.startCount == 1)
     #expect(monitor.isRunning)
-    #expect(defaults.bool(forKey: preferenceKey))
 
     controller.invalidate()
   }
 
-  @Test("Disabling during display refresh cannot enable the monitor")
+  @Test("Revoking Accessibility stops interception and a new grant restores it")
   @MainActor
-  func disableCancelsRefreshCompletion() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
+  func permissionRevocationAndRegrant() async {
     let readGate = AsyncGate()
+    await readGate.open()
     let display = StubVolumeController(readGate: readGate)
     let store = VolumeStore(controller: display)
     let state = VolumeKeyFeatureState()
     let permission = StubAccessibilityPermission()
     let monitor = StubMediaKeyMonitor()
-    let displayMonitor = StubDisplayReconfigurationMonitor()
-    let hud = StubVolumeHUD()
     let controller = VolumeKeyController(
       store: store,
       state: state,
       accessibilityPermission: permission,
-      monitorFactory: { _, _ in monitor },
-      displayReconfigurationMonitorFactory: { onEvent in
-        displayMonitor.configure(onEvent: onEvent)
-        return displayMonitor
-      },
-      hud: hud
+      monitorFactory: { _, _ in monitor }
     )
 
-    controller.setEnabled(true)
-    await waitForRead(display)
-    #expect(state.phase == .enabling)
+    controller.start()
+    await waitForEnabled(state)
 
-    controller.setEnabled(false)
-    displayMonitor.send(.settled)
-    await readGate.open()
-    await waitForRefreshToSettle(store)
+    permission.isGranted = false
+    controller.accessibilityPermissionDidChange(.required)
 
-    #expect(state.phase == .disabled)
-    #expect(!defaults.bool(forKey: preferenceKey))
-    #expect(monitor.startCount == 0)
+    #expect(state.phase == .permissionRequired)
     #expect(!monitor.isRunning)
+
+    permission.isGranted = true
+    controller.accessibilityPermissionDidChange(.granted)
+    await waitForEnabled(state)
+
+    #expect(await display.readCount() == 2)
+    #expect(monitor.startCount == 2)
+    #expect(monitor.isRunning)
+
+    controller.invalidate()
   }
 
-  @Test("A legacy disabled preference needs one manual enable")
+  @Test("Repeated starts do not duplicate display reads or event taps")
   @MainActor
-  func legacyDisabledPreferenceNeedsManualEnable() async {
-    let defaults = UserDefaults.standard
-    let preferenceKey = "VolumeKeysRequested"
-    let originalPreference = defaults.object(forKey: preferenceKey)
-    defer {
-      if let originalPreference {
-        defaults.set(originalPreference, forKey: preferenceKey)
-      } else {
-        defaults.removeObject(forKey: preferenceKey)
-      }
-    }
-
-    defaults.set(false, forKey: preferenceKey)
+  func repeatedStartIsIdempotent() async {
     let readGate = AsyncGate()
-    await readGate.open()
     let display = StubVolumeController(readGate: readGate)
     let store = VolumeStore(controller: display)
     let state = VolumeKeyFeatureState()
@@ -664,17 +503,79 @@ struct VolumeKeyControllerTests {
       }
     )
 
-    controller.restoreIfRequested()
-    #expect(state.phase == .disabled)
-    #expect(monitor.startCount == 0)
-    #expect(displayMonitor.startCount == 1)
-
-    controller.setEnabled(true)
+    controller.start()
+    controller.start()
+    await waitForRead(display)
+    await readGate.open()
     await waitForEnabled(state)
+
+    #expect(await display.readCount() == 1)
     #expect(monitor.startCount == 1)
     #expect(displayMonitor.startCount == 1)
 
     controller.invalidate()
+  }
+
+  @Test("Invalidating during a display read cannot start interception")
+  @MainActor
+  func invalidateCancelsDisplayReadCompletion() async {
+    let readGate = AsyncGate()
+    let display = StubVolumeController(readGate: readGate)
+    let store = VolumeStore(controller: display)
+    let state = VolumeKeyFeatureState()
+    let permission = StubAccessibilityPermission()
+    let monitor = StubMediaKeyMonitor()
+    let controller = VolumeKeyController(
+      store: store,
+      state: state,
+      accessibilityPermission: permission,
+      monitorFactory: { _, _ in monitor }
+    )
+
+    controller.start()
+    await waitForRead(display)
+    #expect(state.phase == .enabling)
+
+    controller.invalidate()
+    await readGate.open()
+    await waitForRefreshToSettle(store)
+
+    #expect(state.phase == .disabled)
+    #expect(monitor.startCount == 0)
+    #expect(!monitor.isRunning)
+  }
+
+  @Test("Invalidation prevents permission and recovery events from restarting")
+  @MainActor
+  func invalidatePreventsRestart() async {
+    let readGate = AsyncGate()
+    await readGate.open()
+    let display = StubVolumeController(readGate: readGate)
+    let store = VolumeStore(controller: display)
+    let state = VolumeKeyFeatureState()
+    let permission = StubAccessibilityPermission()
+    let monitor = StubMediaKeyMonitor()
+    let controller = VolumeKeyController(
+      store: store,
+      state: state,
+      accessibilityPermission: permission,
+      monitorFactory: { _, _ in monitor },
+      automaticRecoveryDelay: .milliseconds(20)
+    )
+
+    controller.start()
+    await waitForEnabled(state)
+    store.communicationFailureHandler?("The display connection changed.")
+    #expect(state.phase == .unavailable("The display connection changed."))
+
+    controller.invalidate()
+    controller.accessibilityPermissionDidChange(.granted)
+    try? await Task.sleep(for: .milliseconds(50))
+
+    #expect(state.phase == .disabled)
+    #expect(await display.readCount() == 1)
+    #expect(monitor.startCount == 1)
+    #expect(!monitor.isRunning)
   }
 
   @MainActor
@@ -743,6 +644,20 @@ struct VolumeKeyControllerTests {
       try? await Task.sleep(for: .milliseconds(1))
     }
     Issue.record("Timed out waiting for volume keys to become enabled.")
+  }
+
+  @MainActor
+  private func waitForPhase(
+    _ phase: VolumeKeyFeatureState.Phase,
+    state: VolumeKeyFeatureState
+  ) async {
+    for _ in 0..<500 {
+      if state.phase == phase {
+        return
+      }
+      try? await Task.sleep(for: .milliseconds(1))
+    }
+    Issue.record("Timed out waiting for volume-key state \(phase).")
   }
 }
 
@@ -861,15 +776,6 @@ private final class StubAccessibilityPermission:
   VolumeKeyAccessibilityProviding
 {
   var isGranted = true
-  private(set) var promptCount = 0
-
-  func request(prompt: Bool) -> AccessibilityPermissionState {
-    if prompt {
-      promptCount += 1
-      isGranted = true
-    }
-    return isGranted ? .granted : .required
-  }
 
   func refresh() -> AccessibilityPermissionState {
     isGranted ? .granted : .required

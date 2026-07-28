@@ -30,27 +30,26 @@ private struct VolumeLevelRollingDigit: View {
   let weight: Font.Weight
 
   var body: some View {
-    GeometryReader { proxy in
-      ZStack {
-        if presentation.isAnimated {
-          digit(presentation.lowerDigit)
-            .offset(y: -progress * proxy.size.height)
+    ZStack {
+      if presentation.isAnimated {
+        digit(presentation.lowerDigit)
+          .offset(y: -CGFloat(progress) * digitHeight)
 
-          digit(presentation.upperDigit)
-            .offset(y: (1 - progress) * proxy.size.height)
-        } else {
-          digit(presentation.lowerDigit)
-        }
+        digit(presentation.upperDigit)
+          .offset(y: CGFloat(1 - progress) * digitHeight)
+      } else {
+        digit(presentation.lowerDigit)
       }
-      .frame(
-        maxWidth: .infinity,
-        maxHeight: .infinity,
-        alignment: .trailing
-      )
     }
-    .frame(width: 10, height: 22)
+    .frame(
+      width: 10,
+      height: digitHeight,
+      alignment: .trailing
+    )
     .clipped()
   }
+
+  private var digitHeight: CGFloat { 22 }
 
   @ViewBuilder
   private func digit(_ value: Int?) -> some View {
