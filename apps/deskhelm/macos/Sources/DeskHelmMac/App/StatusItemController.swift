@@ -15,10 +15,12 @@ final class StatusItemController {
 
   var diagnosticSummary: String {
     let button = statusItem.button
+    let isAccessoryApplication = NSApp.activationPolicy() == .accessory
     return
       "button=\(button != nil) image=\(button?.image != nil) "
       + "visible=\(statusItem.isVisible) window=\(button?.window?.isVisible == true) "
-      + "titleEmpty=\(button?.title.isEmpty == true) menu=true panel=false"
+      + "titleEmpty=\(button?.title.isEmpty == true) menu=true panel=false "
+      + "accessory=\(isAccessoryApplication)"
   }
 
   init(

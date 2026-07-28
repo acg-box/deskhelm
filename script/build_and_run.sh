@@ -401,7 +401,7 @@ case "${MODE}" in
 		STATUS_ITEM_READY_SUMMARY="$(
 			/usr/bin/defaults read com.acgbox.deskhelm StatusItemReadySummary
 		)"
-		EXPECTED_STATUS_ITEM_SUMMARY="button=true image=true visible=true window=true titleEmpty=true menu=true panel=false"
+		EXPECTED_STATUS_ITEM_SUMMARY="button=true image=true visible=true window=true titleEmpty=true menu=true panel=false accessory=true"
 		if [[ "${STATUS_ITEM_READY_SUMMARY}" != "${EXPECTED_STATUS_ITEM_SUMMARY}" ]]; then
 			echo "DeskHelm published an incomplete NSStatusItem readiness state: ${STATUS_ITEM_READY_SUMMARY}" >&2
 			exit 1
@@ -440,6 +440,7 @@ case "${MODE}" in
 				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" key=true "* ]] \
 				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" main=true "* ]] \
 				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" onScreen=true "* ]] \
+				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" accessory=true "* ]] \
 				|| [[ "${SETTINGS_STATE_SUMMARY}" != *" toolbar=icons pane="* ]] \
 				|| [[ ! "${SETTINGS_STATE_SUMMARY}" =~ windowNumber=([1-9][0-9]*) ]] \
 				|| [[ ! "${SETTINGS_STATE_SUMMARY}" =~ width=([1-9][0-9]*) ]] \

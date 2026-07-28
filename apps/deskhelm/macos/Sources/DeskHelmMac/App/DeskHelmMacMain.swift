@@ -51,14 +51,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         launchAtLogin: launchAtLogin,
         softwareUpdater: softwareUpdater
       )
-      volumeKeyController.setHUDPresentationPolicy {
-        [weak settingsWindowController] in
-        settingsWindowController?.isPresentingSettings != true
-      }
-      softwareUpdater.onPresentationFinished {
-        [weak settingsWindowController] in
-        settingsWindowController?.externalWindowPresentationDidFinish()
-      }
 
       self.volumeKeyController = volumeKeyController
       self.softwareUpdater = softwareUpdater

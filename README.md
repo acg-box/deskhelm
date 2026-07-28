@@ -117,12 +117,14 @@ available.
 Select the image-only DeskHelm menu-bar icon to open its native menu. Select
 **Settings…**, or press Command-, while DeskHelm is active. Press Command-Q to
 quit. Settings uses four compact toolbar panes: Display, Volume Keys, General,
-and About.
+and About. Settings and update windows keep DeskHelm in accessory mode, so they
+do not add a Dock icon.
 
 Use the Display pane to drag the volume control, use the arrow keys, or use the
 VoiceOver adjustable action. DeskHelm coalesces rapid preview writes and
 confirms the final target through hardware readback. When keyboard volume
-control is enabled, a transient HUD shows accepted LG volume changes.
+control is enabled, a transient HUD shows accepted LG volume changes, including
+while Settings is open. The HUD does not take keyboard focus from Settings.
 
 Audible feedback starts after the display transport accepts the final preview
 write; the later readback remains the authoritative confirmed value. If the

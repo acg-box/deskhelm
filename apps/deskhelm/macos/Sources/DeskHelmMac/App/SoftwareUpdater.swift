@@ -51,7 +51,6 @@ final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate,
   }
 
   private var updaterController: SPUStandardUpdaterController?
-  private var presentationFinished: (@MainActor () -> Void)?
   @Published private(set) var snapshotRevision: UInt = 0
 
   override init() {
@@ -63,12 +62,6 @@ final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate,
       updaterDelegate: self,
       userDriverDelegate: self
     )
-  }
-
-  func onPresentationFinished(
-    _ action: @escaping @MainActor () -> Void
-  ) {
-    presentationFinished = action
   }
 
   func snapshot() -> Snapshot {
@@ -121,7 +114,6 @@ final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate,
       return
     }
 
-    NSApp.setActivationPolicy(.regular)
     NSRunningApplication.current.activate(options: [.activateAllWindows])
     updaterController.checkForUpdates(sender)
     publishSnapshotChange()
@@ -143,7 +135,6 @@ final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate,
 
   private func finishUpdatePresentation() {
     publishSnapshotChange()
-    presentationFinished?()
   }
 
   private func publishSnapshotChange() {

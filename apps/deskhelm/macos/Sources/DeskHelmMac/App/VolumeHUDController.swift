@@ -114,7 +114,8 @@ final class VolumeHUDController {
     if !wasVisible {
       panel.orderFrontRegardless()
     }
-    if !panel.isKeyWindow {
+    let hasOtherKeyWindow = NSApp.keyWindow.map { $0 !== panel } ?? false
+    if !panel.isKeyWindow, !hasOtherKeyWindow {
       panel.makeKey()
     }
     _ = panel.makeFirstResponder(nil)

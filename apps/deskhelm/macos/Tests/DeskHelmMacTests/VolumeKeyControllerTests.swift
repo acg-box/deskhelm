@@ -6,7 +6,7 @@ import Testing
 
 @Suite("Volume-key controller", .serialized)
 struct VolumeKeyControllerTests {
-  @Test("The controller forwards full target events and cancels off route")
+  @Test("The controller presents the HUD for target events and cancels off route")
   @MainActor
   func forwardsEventsAndCancelsOffRoute() async {
     let readGate = AsyncGate()
