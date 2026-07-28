@@ -222,11 +222,12 @@ secrets available to the repository:
 
 DeskHelm must use its own Sparkle key pair. Do not reuse another application's
 private or public key. The `release` environment protects only the final Linux
-publisher. The release scripts bind Apple Development signing to Personal Team
-`RD3D4LH465`; a different Apple team is rejected. The build uses Hardened
-Runtime without a signing timestamp and is not notarized. Only the final
-publisher receives GitHub contents write permission. The workflow does not
-publish the Rust crate.
+publisher. The release scripts require an Apple Development identity label
+ending in `RD3D4LH465` and require signed code to report TeamIdentifier
+`T54QFA7W2S`; a different identity suffix or code-signing team is rejected. The
+build uses Hardened Runtime without a signing timestamp and is not notarized.
+Only the final publisher receives GitHub contents write permission. The
+workflow does not publish the Rust crate.
 
 ### Architecture
 
