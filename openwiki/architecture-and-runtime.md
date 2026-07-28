@@ -1,7 +1,7 @@
 ---
 type: Architecture Reference
 title: DeskHelm Architecture and Runtime
-description: Describes the shared Rust display core, C ABI, native AppKit status menu and Settings shell, SwiftUI settings workflows, app services, and LG 39GX950B USB-C DDC/CI boundary.
+description: Describes the Rust display core, stable C ABI and Swift adapter, native macOS application layer, settings workflows, app services, and LG 39GX950B USB-C DDC/CI boundary.
 tags: [deskhelm, architecture, rust, swift, appkit, ddc-ci]
 ---
 
@@ -9,7 +9,7 @@ tags: [deskhelm, architecture, rust, swift, appkit, ddc-ci]
 
 ## Workspace Model
 
-DeskHelm is a workspace-first monorepo with two product entrypoints over one Rust core:
+DeskHelm is a workspace-first monorepo with two product entrypoints over one Rust display core. The Rust side owns display discovery, identity verification, verified sessions, DDC/CI transport, the CLI, and the C ABI. The Swift native application layer owns macOS lifecycle, interactive state, Core Audio route qualification, media-key handling, and AppKit/SwiftUI presentation:
 
 | Path | Ownership |
 | --- | --- |
@@ -38,7 +38,7 @@ sequenceDiagram
     participant Shell as AppKit Shell
     participant Settings as SwiftUI Settings
     participant Store as Volume Store
-    participant Adapter as Swift Core Adapter
+    participant Adapter as Rust Display Adapter
     participant ABI as Rust C ABI
     participant Core as Rust Display Core
     participant Mac as macOS DDC Transport
@@ -83,7 +83,7 @@ sequenceDiagram
 
 The actor-owned session serializes hardware I/O away from the main actor. The store allows one preview in flight and retains only the newest pending target. A preview never updates `confirmedLevel`, and an older result never replaces a newer draft. A trailing or release-time read is authoritative. A mismatch triggers one exact set and readback. A failed preview or confirmation triggers one fresh recovery read. A failed refresh or recovery read clears confirmed state.
 
-## Rust Core And CLI
+## Rust Display Core And CLI
 
 `apps/deskhelm/src/lib.rs` exports `VolumeReading`, `read_volume`, and `set_volume`. `set_volume` rejects values above 100 before platform access. The package binary installs `color-eyre`, parses the required `volume` subcommand, and delegates to this library:
 
@@ -111,9 +111,11 @@ Sources: `apps/deskhelm/src/lib.rs`, `apps/deskhelm/src/main.rs`, `apps/deskhelm
 
 A result contains a current or accepted value, `maximum`, a nullable display C string, and a nullable error C string. Only read, set, and session-creation operations return confirmed values. Status codes distinguish success (`0`), runtime error (`1`), invalid argument (`2`), and contained Rust panic (`3`). Exported operations initialize non-null output storage before work, flatten Rust error chains into an owned error string, and use `catch_unwind` so a panic does not unwind through Swift/C. Callers must free each initialized result at most once unless an operation populates it again.
 
-`DeskHelmCore` is a Swift actor. It serializes the synchronous ABI calls, retains the opaque session in a lifetime-owning handle, and discards that handle after any operation error. Each result is freed with `defer`. The adapter maps status codes into typed Swift errors and independently rejects a missing display label, a maximum other than 100, or a current value outside the returned range.
+`RustDisplayAdapter` is the Swift actor that makes this boundary explicit. It serializes the synchronous ABI calls, retains the opaque session in a lifetime-owning handle, and discards that handle after any operation error. Each result is freed with `defer`. The adapter maps status codes into typed Swift errors and independently rejects a missing display label, a maximum other than 100, or a current value outside the returned range.
 
-Sources: `apps/deskhelm/src/ffi.rs`, `apps/deskhelm/macos/Sources/CDeskHelm/include/deskhelm.h`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Services/DeskHelmCore.swift`.
+The ABI is tested on both sides without display hardware. Rust assertions pin status values, exported function signatures, and the 64-bit `DeskHelmVolumeResult` size, alignment, and field offsets. `DeskHelmAppCoreTests` imports `CDeskHelm` directly to verify the same constants and layout as Swift sees them, link every exported symbol, reject null or invalid calls, and confirm that result cleanup clears Rust-owned pointers. These tests catch drift among `ffi.rs`, `deskhelm.h`, and SwiftPM linkage; they do not replace physical DDC/CI validation. The test command and remaining native coverage are documented in [Operations](operations.md#native-app-build-and-run).
+
+Sources: `apps/deskhelm/src/ffi.rs`, `apps/deskhelm/macos/Sources/CDeskHelm/include/deskhelm.h`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Services/RustDisplayAdapter.swift`, `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/CDeskHelmABITests.swift`, `apps/deskhelm/macos/Package.swift`.
 
 ## Native AppKit Shell And Settings
 
@@ -273,7 +275,7 @@ The player follows the global macOS **Play feedback when volume is changed** pre
 
 On macOS 26 or later, the SwiftUI HUD content applies one public `.clear.interactive()` glass effect shaped as a capsule; macOS 14 through 25 use one regular-material capsule. The [AppKit shell](#native-appkit-shell-and-settings) provides a transparent, borderless, nonactivating, mouse-ignoring panel with no second effect wrapper. It temporarily makes that panel key while visible so the clear-glass surface renders as active, but immediately clears the content first responder so a normal keyboard focus ring is not drawn. The panel never becomes main or accepts pointer input; the SwiftUI accessibility label and value remain available. The resulting appearance and focus behavior remain live UI compatibility risks and can still differ from Apple's private OSD. A new level resets the 1.25-second dismissal timer without another layout pass; dismissal fades over 160 ms unless Reduce Motion is enabled, then orders the panel out.
 
-`DisplayReconfigurationMonitor` registers one Core Graphics display-reconfiguration callback when `VolumeKeyController` is created, before startup display reads can begin. It emits one `began` event for a callback burst. A begin callback does not start the settlement timer. After Core Graphics supplies a post-change callback, the monitor emits `settled` only after 500 ms without another post-change callback. Every `began` event gates the shared store. While the always-on controller is started and trusted, `began` also removes the event tap, cancels feedback and pending recovery, enters `unavailable` state, and avoids an error HUD for the expected transition. The shared store increments a connection generation, cancels queued preview and refresh work, clears confirmed state, and blocks new reads and writes until settlement. Its reset barrier waits for active store work to become idle before it calls `DeskHelmCore.resetConnection()`. New reads wait for that barrier, while connection-generation checks prevent a pre-change read, preview, confirmation, or recovery result from restoring stale state. At `settled`, the controller releases the store gate and immediately starts a new trusted enable attempt against a newly discovered session.
+`DisplayReconfigurationMonitor` registers one Core Graphics display-reconfiguration callback when `VolumeKeyController` is created, before startup display reads can begin. It emits one `began` event for a callback burst. A begin callback does not start the settlement timer. After Core Graphics supplies a post-change callback, the monitor emits `settled` only after 500 ms without another post-change callback. Every `began` event gates the shared store. While the always-on controller is started and trusted, `began` also removes the event tap, cancels feedback and pending recovery, enters `unavailable` state, and avoids an error HUD for the expected transition. The shared store increments a connection generation, cancels queued preview and refresh work, clears confirmed state, and blocks new reads and writes until settlement. Its reset barrier waits for active store work to become idle before it calls `RustDisplayAdapter.resetConnection()`. New reads wait for that barrier, while connection-generation checks prevent a pre-change read, preview, confirmation, or recovery result from restoring stale state. At `settled`, the controller releases the store gate and immediately starts a new trusted enable attempt against a newly discovered session.
 
 A lost confirmed state, disabled event tap, or transient DDC/CI failure reported while interception is enabled follows the same fail-open suspension and schedules a new attempt after 750 ms. Each enable attempt checks trust, waits for store work to become idle, and performs bounded fresh reads using delays of 0, 250 ms, 500 ms, 1 s, 2 s, and 4 s; it requires an explicit confirmed refresh result before interception resumes. If all reads fail, the controller remains in `unavailable` state, but that attempt does not schedule another recovery by itself. Missing permission cancels pending enable and recovery work, feedback, interception, and the HUD while keeping the controller ready for a later grant. Event-tap setup failure enters a terminal failed state. Once registered, the display callback stays active for the controller lifetime so every transition can release the store gate at its real completion. App invalidation unregisters that callback and stops current work.
 
@@ -299,6 +301,12 @@ The stateless CLI keeps its original pre-write read, 0–100 maximum check, post
 
 Sources: `apps/deskhelm/src/display.rs`, `apps/deskhelm/src/display/macos.rs`.
 
+### DDC Identity And Audio Route Identity
+
+Rust and Swift make separate eligibility decisions from separate macOS identity surfaces. The Rust display core uses Core Graphics vendor/product identity and one unique EDID-matched IOKit service to authorize DDC/CI access. The Swift native application layer uses the current Core Audio device name, manufacturer, DisplayPort transport, and unique-current-endpoint check to decide whether it may consume volume-key events. A successful decision on one side does not prove or authorize the other.
+
+Sources: `apps/deskhelm/src/display.rs`, `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeKeyOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/DefaultAudioOutputRoute.swift`.
+
 ## LG 39GX950B USB-C Boundary
 
 The physical hardware check is an LG 39GX950B (`1e6d:7863`) connected directly by USB-C to an M4 Max Mac. The cable carries DisplayPort Alt Mode; macOS exposes that connection through its external DCP/DP service path. The service name describes the macOS transport topology and does **not** mean the physical connector is DisplayPort.
@@ -308,7 +316,8 @@ This is a tested compatibility point, not a claim that every LG display or USB-C
 ## Change Guide
 
 - Rust API or display policy: start in `apps/deskhelm/src/lib.rs` and `display.rs`; preserve strict selection and confirmed writes.
-- C ABI: update `ffi.rs` and `deskhelm.h` together; preserve status mapping, panic containment, and explicit result ownership.
+- Supported display or audio route: treat eligibility as a two-sided change. Update `apps/deskhelm/src/display.rs` and its Rust tests for DDC/CI identity or model labels. Update `apps/deskhelm/macos/Sources/DeskHelmAppCore/Models/VolumeKeyOutputRoute.swift`, `apps/deskhelm/macos/Sources/DeskHelmMac/App/DefaultAudioOutputRoute.swift`, and `apps/deskhelm/macos/Tests/DeskHelmAppCoreTests/VolumeKeyOutputRouteTests.swift` for volume-key routing. Preserve exact DDC service/session identity, unique-current-route selection, and fail-open key pass-through. Update `VolumePanel.swift` and the documented hardware boundary when the supported model label changes, and verify DDC/CI access and media-key routing on that hardware.
+- C ABI or Swift adapter: update `ffi.rs`, `deskhelm.h`, and `RustDisplayAdapter.swift` together; preserve status values and layout, panic containment, explicit result ownership, and session invalidation. Extend both Rust ABI assertions and `CDeskHelmABITests.swift`, then run the Swift validation in [Operations](operations.md#native-app-build-and-run).
 - Native lifecycle and Settings: start in `DeskHelmMacMain.swift`, `StatusItemController.swift`, and `SettingsWindowController.swift`; verify accessory-to-regular activation, menu commands, reusable-window closure, toolbar selection, and status/Settings diagnostics.
 - Display state: start in `VolumeStore.swift`, `DisplaySettingsPane.swift`, and `DisplaySettingsView.swift`; add Swift tests for preview, confirmation, recovery, unavailable state, busy state, and errors.
 - Keyboard control: keep `AccessibilityPermission.swift`, `VolumeKeysSettingsPane.swift`, `MediaKeyMonitor.swift`, `VolumeKeyController.swift`, `VolumeMediaKey.swift`, and the HUD aligned; preserve explicit trust, the volume-only allowlist, main-actor hardware work, and fail-open tap removal.

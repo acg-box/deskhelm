@@ -1,6 +1,8 @@
 # DeskHelm
 
-This package owns the DeskHelm Rust core, C ABI, and command-line application.
-The native menu bar application is in `macos/`. Its small AppKit shell hosts a
-SwiftUI panel and links the Rust static library in-process. See the repository
-root `README.md` for build and usage instructions.
+This package owns DeskHelm's Rust display core, C ABI, and command-line
+application. The native macOS application is in `macos/`. Its Swift native
+application layer owns app lifecycle, interactive state, Core Audio route
+qualification, media-key handling, and AppKit/SwiftUI presentation. It links the
+Rust static library in process for display discovery and verified DDC/CI access.
+See the repository root `README.md` for build and usage instructions.

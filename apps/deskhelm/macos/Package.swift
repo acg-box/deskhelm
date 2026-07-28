@@ -59,7 +59,10 @@ let package = Package(
     ),
     .testTarget(
       name: "DeskHelmAppCoreTests",
-      dependencies: ["DeskHelmAppCore"]
+      dependencies: [
+        "CDeskHelm",
+        "DeskHelmAppCore",
+      ]
     ),
     .testTarget(
       name: "DeskHelmMacTests",

@@ -17,11 +17,12 @@ Native macOS menu-bar volume control for an external LG display.
 
 ### Native LG Display Volume Control
 
-DeskHelm provides an AppKit and SwiftUI menu-bar app and a Rust CLI that share
-one direct DDC/CI core. It controls display audio volume through VCP feature
-`0x62` without another display-control executable. The app keeps preview writes
-separate from confirmed hardware readback and can optionally route macOS volume
-keys to the supported LG output.
+DeskHelm has a Rust display core and a Swift native application layer. The Rust
+display core owns display discovery and identity verification, DDC/CI transport,
+verified sessions, the CLI, and the C ABI. The Swift layer owns the macOS
+lifecycle, application state, Core Audio route qualification, media-key handling,
+and AppKit/SwiftUI presentation. The Swift app links the Rust core in process;
+neither product entrypoint invokes another display-control executable.
 
 ## Status
 
@@ -31,8 +32,9 @@ firmware, cables, adapters, and docks can change DDC/CI compatibility.
 
 ## Workspace Posture
 
-- `apps/deskhelm/` owns the shared Rust core, CLI, and C ABI.
-- `apps/deskhelm/macos/` owns the native AppKit and SwiftUI menu-bar app.
+- `apps/deskhelm/` owns the Rust display core, CLI, and C ABI.
+- `apps/deskhelm/macos/` owns the Swift native application layer, including app
+  state, native services, and AppKit/SwiftUI presentation.
 - `script/` owns native build, release, and diagnostic commands, while
   `scripts/` owns repository-maintenance TypeScript programs.
 - `packages/` is reserved for reusable shared packages.
@@ -213,16 +215,17 @@ publish the Rust crate.
 
 DeskHelm is a workspace-first monorepo:
 
-- the Rust core, CLI, and C ABI belong under `apps/deskhelm/`
-- the native macOS app belongs under `apps/deskhelm/macos/`
+- the Rust display core, CLI, and C ABI belong under `apps/deskhelm/`
+- the Swift native application layer belongs under `apps/deskhelm/macos/`
 - repository-maintenance programs belong under `scripts/`
 - repository-native checks are exposed through `Makefile.toml`
 - durable architecture, runbook, and routing notes belong under `openwiki/`
 
-The AppKit shell owns an image-only `NSStatusItem`, a native `NSMenu`, a reusable
-Settings window, and the transient HUD panel. SwiftUI owns the Settings panes
-and HUD content. Both the app and CLI call the Rust DDC/CI core directly; they
-do not invoke another display-control CLI.
+The Swift native application layer uses AppKit for the status menu, windows, and
+HUD panel, and it uses SwiftUI for Settings and HUD content. It also owns native
+app state and services. The Rust display core remains the sole owner of display
+discovery, verified DDC/CI sessions, and transport. The app links that core in
+process, and the CLI calls the same Rust API.
 
 ## Support Me
 
