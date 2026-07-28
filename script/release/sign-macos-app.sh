@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXPECTED_APPLE_TEAM_ID="RD3D4LH465"
+EXPECTED_APPLE_IDENTITY_SUFFIX="RD3D4LH465"
+EXPECTED_APPLE_TEAM_ID="T54QFA7W2S"
 
 usage() {
 	cat >&2 <<'USAGE'
@@ -72,8 +73,8 @@ if [[ -n "$keychain_path" && ! -f "$keychain_path" ]]; then
 	exit 1
 fi
 if [[ "$mode" == "release" ]]; then
-	if [[ ! "$identity" =~ ^Apple\ Development:\ .+\ \(${EXPECTED_APPLE_TEAM_ID}\)$ ]]; then
-		echo "error: release signing requires Personal Team $EXPECTED_APPLE_TEAM_ID" >&2
+	if [[ ! "$identity" =~ ^Apple\ Development:\ .+\ \(${EXPECTED_APPLE_IDENTITY_SUFFIX}\)$ ]]; then
+		echo "error: release signing identity must end with $EXPECTED_APPLE_IDENTITY_SUFFIX" >&2
 		exit 1
 	fi
 	if [[ -z "$keychain_path" ]]; then

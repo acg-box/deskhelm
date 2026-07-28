@@ -268,7 +268,7 @@ if "-dv" in args:
     team = (
         "OTHERTEAM1"
         if os.environ.get("FAKE_CODESIGN_DETAILS") == "wrong_team"
-        else "RD3D4LH465"
+        else "T54QFA7W2S"
     )
     lines = [
         "Executable=fake",
@@ -987,6 +987,25 @@ Path(args[args.index("--appcast") + 1]).write_text("<rss/>", encoding="utf-8")
 	assert (output / CHECKSUM_NAME).is_file()
 	calls = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
 	tool_names = [call[0] for call in calls]
+	security_calls = [call[1:] for call in calls if call[0] == "security"]
+	list_keychains_index = next(
+		index
+		for index, call in enumerate(security_calls)
+		if call[:4] == ["list-keychains", "-d", "user", "-s"]
+	)
+	default_keychain_index = next(
+		index
+		for index, call in enumerate(security_calls)
+		if call[:4] == ["default-keychain", "-d", "user", "-s"]
+	)
+	partition_list_index = next(
+		index
+		for index, call in enumerate(security_calls)
+		if call[0] == "set-key-partition-list"
+	)
+	assert list_keychains_index < default_keychain_index < partition_list_index
+	assert security_calls[list_keychains_index][-1].endswith("release.keychain-db")
+	assert security_calls[default_keychain_index][-1].endswith("release.keychain-db")
 	final_zip_index = max(index for index, call in enumerate(calls) if call[0] == "ditto")
 	appcast_index = tool_names.index("appcast")
 	assert tool_names.index("sign") < final_zip_index < appcast_index
@@ -1047,10 +1066,13 @@ def test_static_contracts() -> None:
 	assert "APPLE_DEVELOPER_ID_" not in release_workflow
 	assert re.search(r"^\s+SPARKLE_PRIVATE_ED_KEY:", release_workflow, re.MULTILINE) is None
 	assert re.search(r"^\s+SPARKLE_PUBLIC_ED_KEY:", release_workflow, re.MULTILINE) is None
-	assert "EXPECTED_APPLE_TEAM_ID=\"RD3D4LH465\"" in (
+	assert "EXPECTED_APPLE_IDENTITY_SUFFIX=\"RD3D4LH465\"" in (
 		RELEASE_DIR / "package-macos.sh"
 	).read_text(encoding="utf-8")
-	assert "EXPECTED_APPLE_TEAM_ID=\"RD3D4LH465\"" in (
+	assert "EXPECTED_APPLE_IDENTITY_SUFFIX=\"RD3D4LH465\"" in (
+		RELEASE_DIR / "sign-macos-app.sh"
+	).read_text(encoding="utf-8")
+	assert "EXPECTED_APPLE_TEAM_ID=\"T54QFA7W2S\"" in (
 		RELEASE_DIR / "sign-macos-app.sh"
 	).read_text(encoding="utf-8")
 	assert "--verify-appcast-signature" in publisher_script
