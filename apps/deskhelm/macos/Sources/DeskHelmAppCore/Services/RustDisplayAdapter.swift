@@ -1,7 +1,7 @@
 import CDeskHelm
 import Foundation
 
-public actor DeskHelmCore: VolumeControlling {
+public actor RustDisplayAdapter: VolumeControlling {
   private var session: DeskHelmSessionHandle?
 
   public init() {}

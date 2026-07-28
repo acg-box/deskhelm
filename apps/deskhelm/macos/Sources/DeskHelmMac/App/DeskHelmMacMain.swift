@@ -33,7 +33,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
       let launchActions = DeskHelmLaunchPlan.actions(
         arguments: CommandLine.arguments
       )
-      let store = VolumeStore(controller: DeskHelmCore())
+      let store = VolumeStore(controller: RustDisplayAdapter())
       let volumeKeyState = VolumeKeyFeatureState()
       let accessibilityPermission = AccessibilityPermission()
       let volumeKeyController = VolumeKeyController(

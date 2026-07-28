@@ -9,9 +9,9 @@ tags: [deskhelm, quickstart, macos, ddc-ci]
 
 ## What This Repository Is
 
-DeskHelm is an early native macOS menu-bar prototype for controlling audio volume on an external LG display. A Rust core reads and sets DDC/CI VCP feature `0x62`; both a command-line interface and a native AppKit/SwiftUI app use that same core. DeskHelm does not invoke another display-control executable.
+DeskHelm is an early native macOS menu-bar prototype for controlling audio volume on an external LG display. It has a Rust display core and a Swift native application layer. The Rust core owns display discovery, identity verification, and DDC/CI access; the CLI calls it directly. The Swift layer crosses a narrow C ABI and owns the native app lifecycle, state, services, and presentation. DeskHelm does not invoke another display-control executable.
 
-The Rust package lives in `apps/deskhelm/`. Its `rlib` supports the CLI and its `staticlib` exposes a narrow C ABI to the SwiftPM package under `apps/deskhelm/macos/`. The app uses an AppKit `NSStatusItem` with a native menu and a reusable Settings window whose SwiftUI panes own display control, volume-key setup, login behavior, and update preferences. [Architecture and Runtime](architecture-and-runtime.md) explains that call path and the hardware safety boundary. [Operations](operations.md) owns exact build, test, staging, launch, and diagnostic commands.
+The Rust package lives in `apps/deskhelm/`. Its `rlib` supports the CLI, and its `staticlib` exposes the C ABI to the SwiftPM package under `apps/deskhelm/macos/`. The Swift native application layer uses AppKit for the status item, menu, Settings window, and HUD panel, and it uses SwiftUI for Settings and HUD content. [Architecture and Runtime](architecture-and-runtime.md) explains the call path and ownership boundary. [Operations](operations.md) owns exact build, test, staging, launch, and diagnostic commands.
 
 Sources: `README.md`, `apps/deskhelm/Cargo.toml`, `apps/deskhelm/src/`, `apps/deskhelm/macos/`, `script/build_and_run.sh`.
 
@@ -24,13 +24,13 @@ The release pipeline publishes `deskhelm-aarch64-apple-darwin.zip`, which contai
 - An Apple Silicon Mac; the menu-bar app requires macOS 14 or later.
 - One external LG display with DDC/CI enabled and audio volume exposed as 0–100.
 - A cable, adapter, or dock path that passes DDC/CI traffic.
-- Xcode/Swift 6.2 for the native app build; the repository Rust toolchain for the core and CLI.
+- Xcode/Swift 6.2 for the native app build; the repository Rust toolchain for the display core and CLI.
 
 The verified hardware point is an LG 39GX950B (`1e6d:7863`) connected directly to an M4 Max Mac over USB-C. macOS presents its DisplayPort Alt Mode connection through an external DCP/DP service path; that software path does not change the physical connector from USB-C. Compatibility still varies by display firmware and connection path.
 
 ## Run The Menu-Bar App
 
-Build the Rust core and Swift package, stage `DeskHelm.app`, and open it:
+Build the Rust display core and Swift package, stage `DeskHelm.app`, and open it:
 
 ```sh
 ./script/build_and_run.sh
@@ -97,14 +97,14 @@ The Swift tests cover volume-state validation, refresh outcomes, one requested r
 
 ## Wiki Map
 
-- [Architecture and Runtime](architecture-and-runtime.md) - Rust core, C ABI, AppKit status menu and Settings shell, SwiftUI display workflow, app services, DDC/CI flow, and hardware boundary.
+- [Architecture and Runtime](architecture-and-runtime.md) - Rust display core, C ABI, Swift native application layer, DDC/CI flow, app services, and hardware boundary.
 - [Operations](operations.md) - SwiftPM build-and-run script, Swift tests, repository validation, CI, and Apple Development-signed macOS release packaging.
 - [Template Adoption](template-adoption.md) - completed transition from the placeholder template to DeskHelm and identity consistency checks.
 - [Knowledge Maintenance](knowledge-maintenance.md) - OpenWiki routing, claim ownership, manual regeneration, evidence rules, and historical documentation decisions.
 
 ## Repository Boundaries
 
-- `apps/deskhelm/src/` owns the Rust core, C ABI, and CLI; `apps/deskhelm/macos/` owns the SwiftPM native app.
+- `apps/deskhelm/src/` owns the Rust display core, C ABI, and CLI; `apps/deskhelm/macos/` owns the Swift native application layer.
 - `script/build_and_run.sh` owns local native build, staging, launch, and diagnostics; `script/release/` owns source validation, signing, appcast creation, artifact validation, and publication. `scripts/` separately owns Node.js-executed TypeScript maintenance programs.
 - `packages/` is reserved for reusable packages. Root `Cargo.toml` owns workspace membership and shared Rust versions.
 - `Makefile.toml` owns local validation tasks. Existing GitHub workflows own Linux language checks and Apple Silicon app release orchestration; local macOS checks and the release job own Swift validation.
@@ -114,6 +114,7 @@ The Swift tests cover volume-state validation, refresh outcomes, one requested r
 
 1. Read the page that owns the affected contract and verify it against cited source.
 2. Keep the Rust API, C header, and Swift adapter aligned when changing the native boundary.
-3. Preserve strict one-display selection, 0–100 validation, preview-versus-confirmed state separation, final readback, and failure recovery unless the product contract deliberately changes.
-4. Run the narrow Rust or Swift check while iterating, then `cargo make check` when prerequisites are available.
-5. Verify hardware-affecting changes on the documented USB-C LG 39GX950B setup and record any untested boundary explicitly.
+3. Treat supported-display changes as two-sided identity changes. Update the Rust DDC identity policy and the Swift Core Audio route policy, with focused tests for both.
+4. Preserve strict one-display selection, 0–100 validation, preview-versus-confirmed state separation, final readback, and failure recovery unless the product contract deliberately changes.
+5. Run the narrow Rust or Swift check while iterating, then `cargo make check` when prerequisites are available.
+6. Verify hardware-affecting changes on the documented USB-C LG 39GX950B setup and record any untested boundary explicitly.

@@ -114,10 +114,10 @@ struct VolumeStoreTests {
     )
   }
 
-  @Test("Core rejects an unsupported display volume range")
+  @Test("The Rust display adapter rejects an unsupported volume range")
   func unsupportedMaximum() {
     do {
-      _ = try DeskHelmCore.validatedReading(
+      _ = try RustDisplayAdapter.validatedReading(
         display: "LG ULTRAGEAR+",
         current: 25,
         maximum: 50

@@ -394,17 +394,63 @@ fn owned_c_string(text: &str) -> *mut c_char {
 
 #[cfg(test)]
 mod tests {
-	use std::{ffi::CStr, mem::MaybeUninit, ptr};
+	use std::{
+		ffi::CStr,
+		mem::{self, MaybeUninit},
+		ptr,
+	};
 
 	use color_eyre::eyre::{self, WrapErr};
 
 	use crate::{
 		VolumeReading,
 		ffi::{
-			self, DeskHelmVolumeResult, STATUS_INVALID_ARGUMENT, STATUS_OK, STATUS_PANIC,
-			STATUS_RUNTIME_ERROR,
+			self, DeskHelmSession, DeskHelmVolumeResult, STATUS_INVALID_ARGUMENT, STATUS_OK,
+			STATUS_PANIC, STATUS_RUNTIME_ERROR,
 		},
 	};
+
+	#[test]
+	fn exported_abi_contract_is_stable() {
+		assert_eq!(STATUS_OK, 0);
+		assert_eq!(STATUS_RUNTIME_ERROR, 1);
+		assert_eq!(STATUS_INVALID_ARGUMENT, 2);
+		assert_eq!(STATUS_PANIC, 3);
+		assert_eq!(mem::size_of::<DeskHelmVolumeResult>(), 24);
+		assert_eq!(mem::align_of::<DeskHelmVolumeResult>(), 8);
+		assert_eq!(mem::offset_of!(DeskHelmVolumeResult, current), 0);
+		assert_eq!(mem::offset_of!(DeskHelmVolumeResult, maximum), 2);
+		assert_eq!(mem::offset_of!(DeskHelmVolumeResult, display), 8);
+		assert_eq!(mem::offset_of!(DeskHelmVolumeResult, error), 16);
+
+		let _: for<'a> unsafe extern "C" fn(
+			Option<&'a mut MaybeUninit<DeskHelmVolumeResult>>,
+		) -> i32 = ffi::deskhelm_read_volume;
+		let _: for<'a> unsafe extern "C" fn(
+			i32,
+			Option<&'a mut MaybeUninit<DeskHelmVolumeResult>>,
+		) -> i32 = ffi::deskhelm_set_volume;
+		let _: for<'a> unsafe extern "C" fn(
+			*mut *mut DeskHelmSession,
+			Option<&'a mut MaybeUninit<DeskHelmVolumeResult>>,
+		) -> i32 = ffi::deskhelm_session_create;
+		let _: for<'a> unsafe extern "C" fn(
+			*mut DeskHelmSession,
+			Option<&'a mut MaybeUninit<DeskHelmVolumeResult>>,
+		) -> i32 = ffi::deskhelm_session_read;
+		let _: for<'a> unsafe extern "C" fn(
+			*mut DeskHelmSession,
+			i32,
+			Option<&'a mut MaybeUninit<DeskHelmVolumeResult>>,
+		) -> i32 = ffi::deskhelm_session_set;
+		let _: for<'a> unsafe extern "C" fn(
+			*mut DeskHelmSession,
+			i32,
+			Option<&'a mut MaybeUninit<DeskHelmVolumeResult>>,
+		) -> i32 = ffi::deskhelm_session_write;
+		let _: unsafe extern "C" fn(*mut DeskHelmSession) = ffi::deskhelm_session_free;
+		let _: unsafe extern "C" fn(*mut DeskHelmVolumeResult) = ffi::deskhelm_volume_result_free;
+	}
 
 	#[test]
 	fn null_output_is_rejected() {
