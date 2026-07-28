@@ -28,6 +28,12 @@ APPCAST_NAME = "appcast.xml"
 CHECKSUM_NAME = f"{ARCHIVE_NAME}.sha256"
 PUBLIC_KEY = base64.b64encode(bytes(range(32))).decode("ascii")
 SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+GITHUB_RELEASE_CONTEXT = (
+	"GITHUB_ACTIONS",
+	"GITHUB_REF",
+	"GITHUB_REPOSITORY",
+	"GITHUB_SHA",
+)
 
 
 def run(
@@ -39,10 +45,15 @@ def run(
 	check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
 	command = [str(arg) for arg in args]
+	effective_env = env
+	if effective_env is None:
+		effective_env = os.environ.copy()
+		for key in GITHUB_RELEASE_CONTEXT:
+			effective_env.pop(key, None)
 	result = subprocess.run(
 		command,
 		cwd=cwd,
-		env=env,
+		env=effective_env,
 		input=input_text,
 		capture_output=True,
 		text=True,
