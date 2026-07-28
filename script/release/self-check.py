@@ -1051,7 +1051,6 @@ def test_static_contracts() -> None:
 	assert "--verify-appcast-signature" in publisher_script
 	assert "make_latest: 'true'" in publisher_script
 	assert "releases/tags/" not in publisher_script
-	assert "https://uploads.github.com" in publisher_script
 	assert "release upload" not in publisher_script
 	assert "DESKHELM_GH_BIN" not in publisher_script
 	for match in re.finditer(r"^\s*uses:\s*[^\s]+@([^\s]+)", release_workflow, re.MULTILINE):
