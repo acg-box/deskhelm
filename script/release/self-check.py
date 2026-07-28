@@ -112,7 +112,12 @@ version = "1.2.3"
 		encoding="utf-8",
 	)
 	(repo / "apps/deskhelm/macos/Package.swift").write_text(
-		'.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.4")\n',
+		"""\
+.package(
+  url: "https://github.com/sparkle-project/Sparkle",
+  exact: "2.9.4"
+)
+""",
 		encoding="utf-8",
 	)
 	resolved_path = repo / "apps/deskhelm/macos/Package.resolved"

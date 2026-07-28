@@ -20,7 +20,7 @@ const deskHelmPackages = new Set(['deskhelm']);
 const fullCommitPattern = /^[0-9a-fA-F]{40}$/u;
 const lowercaseCommitPattern = /^[0-9a-f]{40}$/u;
 const sparkleDeclarationPattern =
-  /\.package\(url:\s*"https:\/\/github\.com\/sparkle-project\/Sparkle",\s*exact:\s*"([^"]+)"\)/gu;
+  /\.package\(\s*url:\s*"https:\/\/github\.com\/sparkle-project\/Sparkle",\s*exact:\s*"([^"]+)"\s*\)/gu;
 
 interface SourceArguments {
   readonly tag: string;
