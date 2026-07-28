@@ -12,6 +12,7 @@ final class SettingsWindowController: NSWindowController,
     subsystem: "com.acgbox.deskhelm",
     category: "Settings"
   )
+  private let accessibilityPermissionGuide: AccessibilityPermissionGuideWindowController
   private let accessibilityPermission: AccessibilityPermission
   private let launchAtLogin: LaunchAtLoginController
   private let selection: SettingsSelection
@@ -31,7 +32,12 @@ final class SettingsWindowController: NSWindowController,
     softwareUpdater: SoftwareUpdater
   ) {
     let selection = SettingsSelection()
+    let accessibilityPermissionGuide =
+      AccessibilityPermissionGuideWindowController(
+        permission: accessibilityPermission
+      )
     self.selection = selection
+    self.accessibilityPermissionGuide = accessibilityPermissionGuide
     self.accessibilityPermission = accessibilityPermission
     self.launchAtLogin = launchAtLogin
     self.volumeKeyController = volumeKeyController
@@ -40,10 +46,12 @@ final class SettingsWindowController: NSWindowController,
       selection: selection,
       store: store,
       volumeKeyState: volumeKeyState,
-      volumeKeyController: volumeKeyController,
       accessibilityPermission: accessibilityPermission,
       launchAtLogin: launchAtLogin,
-      softwareUpdater: softwareUpdater
+      softwareUpdater: softwareUpdater,
+      presentAccessibilityPermissionGuide: {
+        accessibilityPermissionGuide.present()
+      }
     )
     let hostingController = NSHostingController(rootView: rootView)
     hostingController.sizingOptions = []
@@ -51,7 +59,6 @@ final class SettingsWindowController: NSWindowController,
       width: Self.contentWidth,
       height: Self.contentHeight(
         for: selection.section,
-        accessibilityGranted: accessibilityPermission.isGranted,
         launchAtLoginState: launchAtLogin.state
       )
     )
@@ -74,8 +81,10 @@ final class SettingsWindowController: NSWindowController,
     selection.onSelectionChange { [weak self] section in
       self?.selectPane(section)
     }
-    accessibilityPermission.onStateChange { [weak self] _ in
-      guard let self, selection.section == .volumeKeys else { return }
+    accessibilityPermission.onStateChange { [weak self] permissionState in
+      guard let self else { return }
+      self.volumeKeyController.accessibilityPermissionDidChange(permissionState)
+      guard self.selection.section == .volumeKeys else { return }
       resizeWindow(
         for: .volumeKeys,
         animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -150,6 +159,7 @@ final class SettingsWindowController: NSWindowController,
 
   func closeForTermination() {
     NotificationCenter.default.removeObserver(self)
+    accessibilityPermissionGuide.close()
     window?.delegate = nil
     close()
   }
@@ -169,6 +179,7 @@ final class SettingsWindowController: NSWindowController,
 
   func windowWillClose(_ notification: Notification) {
     presentationRequested = false
+    accessibilityPermissionGuide.close()
     publishState(phase: "closed")
     Task { @MainActor [weak self] in
       await Task.yield()
@@ -240,8 +251,9 @@ final class SettingsWindowController: NSWindowController,
 
   @objc
   private func applicationDidBecomeActive(_ notification: Notification) {
+    accessibilityPermission.refresh()
     guard window?.isVisible == true else { return }
-    refreshSystemState()
+    launchAtLogin.refresh()
     resizeWindow(
       for: selection.section,
       animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -276,7 +288,6 @@ final class SettingsWindowController: NSWindowController,
       width: Self.contentWidth,
       height: Self.contentHeight(
         for: section,
-        accessibilityGranted: accessibilityPermission.isGranted,
         launchAtLoginState: launchAtLogin.state
       )
     )
@@ -338,12 +349,8 @@ final class SettingsWindowController: NSWindowController,
 
   private static func contentHeight(
     for section: SettingsSection,
-    accessibilityGranted: Bool,
     launchAtLoginState: LaunchAtLoginState
   ) -> CGFloat {
-    if section == .volumeKeys, !accessibilityGranted {
-      return 280
-    }
     if section == .general {
       switch launchAtLoginState {
       case .requiresApproval:

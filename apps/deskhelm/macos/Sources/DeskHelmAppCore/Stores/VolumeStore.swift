@@ -26,6 +26,7 @@ public final class VolumeStore {
   @ObservationIgnored public var communicationFailureHandler: ((String) -> Void)?
 
   private let controller: any VolumeControlling
+  private let confirmationClock = ContinuousClock()
   @ObservationIgnored private var draftRevision: UInt = 0
   private var isRefreshing = false
   private var isRefreshRequested = false
@@ -35,6 +36,8 @@ public final class VolumeStore {
   @ObservationIgnored private var previewInFlight: PendingWrite?
   @ObservationIgnored private var previewWorker: Task<Void, Never>?
   @ObservationIgnored private var trailingConfirmation: Task<Void, Never>?
+  @ObservationIgnored private var trailingConfirmationDeadline: ContinuousClock.Instant?
+  @ObservationIgnored private var trailingConfirmationRequest: PendingWrite?
   @ObservationIgnored private var confirmationGeneration: UInt = 0
   @ObservationIgnored private var activeConfirmations = 0
   @ObservationIgnored private var lastIssuedLevel: Int?
@@ -61,14 +64,29 @@ public final class VolumeStore {
     isBusy && confirmedLevel == nil && errorMessage == nil
   }
 
+  var scheduledConfirmationDeadline: ContinuousClock.Instant? {
+    trailingConfirmationDeadline
+  }
+
   public var sliderRange: ClosedRange<Double> {
     0...Double(max(maximumLevel, 1))
   }
 
-  public func updateDraft(_ value: Double) {
-    draftLevel = min(max(value, sliderRange.lowerBound), sliderRange.upperBound)
+  @discardableResult
+  public func updateDraft(_ value: Double) -> Bool {
+    let clamped = min(
+      max(value, sliderRange.lowerBound),
+      sliderRange.upperBound
+    )
+    guard clamped != draftLevel else { return false }
+
+    let previousTarget = Int(draftLevel.rounded())
+    draftLevel = clamped
+    guard Int(clamped.rounded()) != previousTarget else { return true }
+
     draftRevision &+= 1
     resolveSupersededPreviewAcceptanceWaiters()
+    return true
   }
 
   public func requestRefresh() {
@@ -211,8 +229,7 @@ public final class VolumeStore {
       return .skipped
     }
 
-    trailingConfirmation?.cancel()
-    trailingConfirmation = nil
+    cancelTrailingConfirmation()
     confirmationGeneration &+= 1
     isRefreshing = true
     updateBusyState()
@@ -255,8 +272,7 @@ public final class VolumeStore {
     guard let request = currentRequest else { return }
 
     enqueuePreview(request, coalesceInitialWrite: false)
-    trailingConfirmation?.cancel()
-    trailingConfirmation = nil
+    cancelTrailingConfirmation()
     confirmationGeneration &+= 1
     let generation = confirmationGeneration
     await confirm(request, generation: generation)
@@ -387,25 +403,44 @@ public final class VolumeStore {
   private func scheduleTrailingConfirmation(
     for request: PendingWrite
   ) {
-    trailingConfirmation?.cancel()
     confirmationGeneration &+= 1
-    let generation = confirmationGeneration
+    trailingConfirmationRequest = request
+    trailingConfirmationDeadline = confirmationClock.now.advanced(
+      by: .milliseconds(150)
+    )
+
+    guard trailingConfirmation == nil else { return }
 
     trailingConfirmation = Task { @MainActor [weak self] in
+      await self?.runTrailingConfirmation()
+    }
+  }
+
+  private func runTrailingConfirmation() async {
+    while !Task.isCancelled {
+      guard let deadline = trailingConfirmationDeadline else {
+        trailingConfirmation = nil
+        return
+      }
+
       do {
-        try await Task.sleep(for: .milliseconds(150))
+        try await confirmationClock.sleep(until: deadline)
       } catch {
         return
       }
 
-      guard let self,
-        self.confirmationGeneration == generation
-      else {
+      guard deadline == trailingConfirmationDeadline else { continue }
+      guard let request = trailingConfirmationRequest else {
+        trailingConfirmation = nil
         return
       }
 
-      self.trailingConfirmation = nil
-      await self.confirm(request, generation: generation)
+      let generation = confirmationGeneration
+      trailingConfirmationDeadline = nil
+      trailingConfirmationRequest = nil
+      trailingConfirmation = nil
+      await confirm(request, generation: generation)
+      return
     }
   }
 
@@ -539,10 +574,16 @@ public final class VolumeStore {
 
   private func invalidatePendingOperations() {
     pendingPreview = nil
-    trailingConfirmation?.cancel()
-    trailingConfirmation = nil
+    cancelTrailingConfirmation()
     confirmationGeneration &+= 1
     lastIssuedLevel = nil
+  }
+
+  private func cancelTrailingConfirmation() {
+    trailingConfirmation?.cancel()
+    trailingConfirmation = nil
+    trailingConfirmationDeadline = nil
+    trailingConfirmationRequest = nil
   }
 
   private func applyConfirmed(

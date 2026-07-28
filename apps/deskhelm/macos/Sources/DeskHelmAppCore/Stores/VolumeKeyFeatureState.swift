@@ -21,15 +21,6 @@ public final class VolumeKeyFeatureState {
     phase == .enabled
   }
 
-  public var isRequested: Bool {
-    switch phase {
-    case .enabling, .enabled, .unavailable:
-      true
-    case .disabled, .permissionRequired, .failed:
-      false
-    }
-  }
-
   public var statusMessage: String? {
     switch phase {
     case .disabled, .enabled:
@@ -37,7 +28,7 @@ public final class VolumeKeyFeatureState {
     case .enabling:
       "Enabling keyboard volume control…"
     case .permissionRequired:
-      "Allow DeskHelm in Privacy & Security > Accessibility, then enable volume keys again."
+      "Volume keys start automatically after Accessibility access is granted."
     case .unavailable(let message):
       message
     case .failed(let message):

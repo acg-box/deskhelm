@@ -40,18 +40,6 @@ final class AccessibilityPermission {
   }
 
   @discardableResult
-  func request(prompt: Bool) -> AccessibilityPermissionState {
-    if prompt {
-      let promptKey =
-        kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-      let options = [promptKey: true] as CFDictionary
-      _ = AXIsProcessTrustedWithOptions(options)
-    }
-
-    return refresh()
-  }
-
-  @discardableResult
   func openSystemSettings() -> Bool {
     let privacyQuery = "Privacy_Accessibility"
     let modernURLString =

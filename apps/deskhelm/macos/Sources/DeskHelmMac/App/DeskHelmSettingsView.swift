@@ -41,7 +41,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case .display:
       198
     case .volumeKeys:
-      190
+      180
     case .general:
       135
     case .about:
@@ -88,27 +88,29 @@ struct DeskHelmSettingsView: View {
 
   private let store: VolumeStore
   private let volumeKeyState: VolumeKeyFeatureState
-  private let volumeKeyController: VolumeKeyController
   private let accessibilityPermission: AccessibilityPermission
   private let launchAtLogin: LaunchAtLoginController
   private let softwareUpdater: SoftwareUpdater
+  private let presentAccessibilityPermissionGuide: @MainActor () -> Void
 
   init(
     selection: SettingsSelection,
     store: VolumeStore,
     volumeKeyState: VolumeKeyFeatureState,
-    volumeKeyController: VolumeKeyController,
     accessibilityPermission: AccessibilityPermission,
     launchAtLogin: LaunchAtLoginController,
-    softwareUpdater: SoftwareUpdater
+    softwareUpdater: SoftwareUpdater,
+    presentAccessibilityPermissionGuide:
+      @escaping @MainActor () -> Void
   ) {
     self.selection = selection
     self.store = store
     self.volumeKeyState = volumeKeyState
-    self.volumeKeyController = volumeKeyController
     self.accessibilityPermission = accessibilityPermission
     self.launchAtLogin = launchAtLogin
     self.softwareUpdater = softwareUpdater
+    self.presentAccessibilityPermissionGuide =
+      presentAccessibilityPermissionGuide
   }
 
   var body: some View {
@@ -135,7 +137,7 @@ struct DeskHelmSettingsView: View {
       VolumeKeysSettingsPane(
         state: volumeKeyState,
         permission: accessibilityPermission,
-        controller: volumeKeyController
+        presentPermissionGuide: presentAccessibilityPermissionGuide
       )
     case .general:
       GeneralSettingsPane(launchAtLogin: launchAtLogin)

@@ -69,7 +69,7 @@ final class PermissionAppDragSourceView: NSView, NSDraggingSource {
   }
 
   override var intrinsicContentSize: NSSize {
-    NSSize(width: 116, height: 34)
+    NSSize(width: 126, height: 34)
   }
 
   func configure(bundleURL: URL, icon: NSImage, label: String) {
@@ -174,7 +174,7 @@ final class PermissionAppDragSourceView: NSView, NSDraggingSource {
     ]
     let iconSize: CGFloat = 20
     let iconLabelGap: CGFloat = 7
-    let horizontalPadding: CGFloat = 12
+    let horizontalPadding: CGFloat = 8
     let maxLabelWidth = max(
       0,
       chipRect.width

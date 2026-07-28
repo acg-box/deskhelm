@@ -1,8 +1,7 @@
 import SwiftUI
 
 public struct DisplaySettingsView: View {
-  @Bindable private var store: VolumeStore
-  @State private var isEditing = false
+  private let store: VolumeStore
 
   public init(store: VolumeStore) {
     self.store = store
@@ -52,13 +51,38 @@ public struct DisplaySettingsView: View {
   }
 
   private var volumeControl: some View {
+    DisplayVolumeControl(store: store)
+  }
+
+  @ViewBuilder
+  private var errorStatus: some View {
+    if let errorMessage = store.errorMessage {
+      Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+        .font(.caption)
+        .foregroundStyle(.red)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("volume-error")
+    }
+  }
+}
+
+@MainActor
+private struct DisplayVolumeControl: View {
+  @Bindable private var store: VolumeStore
+  @State private var isEditing = false
+
+  init(store: VolumeStore) {
+    self.store = store
+  }
+
+  var body: some View {
     VolumeLevelControl(
       level: store.draftLevel,
       maximum: Double(store.maximumLevel),
       isEnabled: store.isAdjustable,
       isEditing: isEditing,
       onChange: { level in
-        store.updateDraft(level)
+        guard store.updateDraft(level) else { return }
         store.queueDraftApply()
       },
       onEditingChanged: { editing in
@@ -74,22 +98,12 @@ public struct DisplaySettingsView: View {
       }
     )
   }
-
-  @ViewBuilder
-  private var errorStatus: some View {
-    if let errorMessage = store.errorMessage {
-      Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-        .font(.caption)
-        .foregroundStyle(.red)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("volume-error")
-    }
-  }
-
 }
 
 @MainActor
 private struct VolumeLevelControl: View, Animatable {
+  @FocusState private var isFocused: Bool
+
   var level: Double
   let maximum: Double
   let isEnabled: Bool
@@ -115,8 +129,8 @@ private struct VolumeLevelControl: View, Animatable {
         .font(.system(size: 16, weight: .semibold))
         .accessibilityHidden(true)
 
-      track(presentation)
-        .frame(height: 18)
+      track(presentation, isFocused: isFocused)
+        .frame(height: focusDiameter)
         .contentShape(Rectangle())
 
       Image(systemName: "speaker.wave.3.fill")
@@ -152,7 +166,9 @@ private struct VolumeLevelControl: View, Animatable {
     )
     .accessibilityIdentifier("volume-slider")
     .disabled(!isEnabled)
-    .focusable(isEnabled)
+    .focusable(isEnabled, interactions: .edit)
+    .focused($isFocused)
+    .focusEffectDisabled()
     .onKeyPress(.leftArrow) {
       adjustFromKeyboard(.decrement)
     }
@@ -177,7 +193,8 @@ private struct VolumeLevelControl: View, Animatable {
   }
 
   private func track(
-    _ presentation: VolumeLevelPresentation
+    _ presentation: VolumeLevelPresentation,
+    isFocused: Bool
   ) -> some View {
     GeometryReader { proxy in
       let travel = max(proxy.size.width - thumbDiameter, 0)
@@ -192,10 +209,20 @@ private struct VolumeLevelControl: View, Animatable {
           .fill(.primary.opacity(0.72))
           .frame(width: thumbX + thumbDiameter / 2, height: 5)
 
-        Circle()
-          .fill(.primary)
-          .frame(width: thumbDiameter, height: thumbDiameter)
-          .offset(x: thumbX)
+        ZStack {
+          Circle()
+            .stroke(
+              .primary.opacity(isFocused ? 0.45 : 0),
+              lineWidth: 1.5
+            )
+            .frame(width: focusDiameter, height: focusDiameter)
+
+          Circle()
+            .fill(.primary)
+            .frame(width: thumbDiameter, height: thumbDiameter)
+        }
+        .frame(width: focusDiameter, height: focusDiameter)
+        .offset(x: thumbX - (focusDiameter - thumbDiameter) / 2)
       }
       .frame(maxHeight: .infinity, alignment: .center)
       .contentShape(Rectangle())
@@ -225,6 +252,10 @@ private struct VolumeLevelControl: View, Animatable {
 
   private var thumbDiameter: Double {
     14
+  }
+
+  private var focusDiameter: Double {
+    20
   }
 
   private func adjustFromKeyboard(

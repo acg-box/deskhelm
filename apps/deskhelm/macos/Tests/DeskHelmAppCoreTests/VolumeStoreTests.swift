@@ -37,14 +37,81 @@ struct VolumeStoreTests {
   func smoothDraft() {
     let store = VolumeStore(controller: StubVolumeController())
 
-    store.updateDraft(24.4)
+    #expect(store.updateDraft(24.4))
     #expect(abs(store.draftLevel - 24.4) < 0.001)
+    #expect(!store.updateDraft(24.4))
 
     store.updateDraft(-1)
     #expect(store.draftLevel == 0)
 
     store.updateDraft(101)
     #expect(store.draftLevel == 100)
+  }
+
+  @Test("Continuous samples coalesce and confirm after the latest input")
+  @MainActor
+  func continuousSamples() async {
+    let controller = StubVolumeController(
+      readResponses: [
+        .success(Self.reading(level: 24)),
+        .success(Self.reading(level: 25)),
+      ],
+      writeResponses: [.success(())]
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    for sample in 0..<500 {
+      store.updateDraft(25 + Double(sample) / 2_000)
+      store.queueDraftApply()
+    }
+
+    await waitForConfirmedLevel(25, store: store)
+
+    #expect(await controller.previewedLevels() == [25])
+    #expect(await controller.confirmedLevels().isEmpty)
+    #expect(
+      await controller.operations()
+        == [.read, .write(25), .read]
+    )
+    #expect(store.draftLevel == 25)
+  }
+
+  @Test("New input moves an active trailing-confirmation deadline")
+  @MainActor
+  func activeConfirmationDeadlineMoves() async {
+    let controller = StubVolumeController(
+      readResponses: [
+        .success(Self.reading(level: 24)),
+        .success(Self.reading(level: 35)),
+      ],
+      writeResponses: [.success(()), .success(())]
+    )
+    let store = VolumeStore(controller: controller)
+    await store.refresh()
+
+    store.updateDraft(25)
+    store.queueDraftApply()
+    let firstDeadline = store.scheduledConfirmationDeadline
+
+    store.updateDraft(35)
+    store.queueDraftApply()
+    let movedDeadline = store.scheduledConfirmationDeadline
+
+    #expect(firstDeadline != nil)
+    #expect(movedDeadline != nil)
+    if let firstDeadline, let movedDeadline {
+      #expect(movedDeadline > firstDeadline)
+    }
+
+    await waitForConfirmedLevel(35, store: store)
+
+    #expect(await controller.previewedLevels() == [35])
+    #expect(await controller.confirmedLevels().isEmpty)
+    #expect(
+      await controller.operations()
+        == [.read, .write(35), .read]
+    )
   }
 
   @Test("Core rejects an unsupported display volume range")
