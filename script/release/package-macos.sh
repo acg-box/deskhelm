@@ -228,6 +228,13 @@ keychain_created=1
 	"$keychain_path"
 
 identity_list="$("$security_bin" find-identity -v -p codesigning "$keychain_path")"
+valid_identity_count="$(
+	grep -Ec '^[[:space:]]*[0-9]+\) [0-9A-Fa-f]{40} ".+"$' <<<"$identity_list" || true
+)"
+if [[ "$valid_identity_count" != "1" ]]; then
+	echo "error: release keychain must contain exactly one valid codesigning identity" >&2
+	exit 1
+fi
 identity_matches="$(grep -F "\"$signing_identity\"" <<<"$identity_list" || true)"
 identity_match_count="$(grep -c . <<<"$identity_matches" || true)"
 if [[ "$identity_match_count" != "1" ]]; then

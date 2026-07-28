@@ -12,12 +12,13 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -29,6 +30,13 @@ ARCHIVE_NAME = "deskhelm-aarch64-apple-darwin.zip"
 APPCAST_NAME = "appcast.xml"
 CHECKSUM_NAME = f"{ARCHIVE_NAME}.sha256"
 SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+MAX_APPCAST_BYTES = 256 * 1024
+MAX_PLIST_BYTES = 1024 * 1024
+MAX_ZIP_ENTRIES = 10_000
+MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_ZIP_PATH_BYTES = 1024
+MAX_ZIP_METADATA_BYTES = 4 * 1024 * 1024
+MAX_ZIP_SYMLINK_TARGET_BYTES = 256
 SEMVER_COMPONENT = r"(?:0|[1-9][0-9]*)"
 STABLE_VERSION_RE = re.compile(
 	rf"^{SEMVER_COMPONENT}\.{SEMVER_COMPONENT}\.{SEMVER_COMPONENT}$"
@@ -61,7 +69,27 @@ def fail(message: str) -> None:
 	raise ValidationError(message)
 
 
+def read_bounded_file(path: Path, *, max_bytes: int, source: str) -> bytes:
+	try:
+		with path.open("rb") as handle:
+			data = handle.read(max_bytes + 1)
+	except OSError as error:
+		fail(f"cannot read {source}: {error}")
+	if len(data) > max_bytes:
+		fail(f"{source} exceeds the {max_bytes}-byte limit")
+	return data
+
+
+def reject_xml_declarations(data: bytes, *, source: str) -> None:
+	upper = data.upper()
+	if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
+		fail(f"{source} must not contain DOCTYPE or ENTITY declarations")
+
+
 def read_plist_bytes(data: bytes, source: str) -> dict[str, Any]:
+	if len(data) > MAX_PLIST_BYTES:
+		fail(f"plist at {source} exceeds the {MAX_PLIST_BYTES}-byte limit")
+	reject_xml_declarations(data, source=f"plist at {source}")
 	try:
 		plist = plistlib.loads(data)
 	except plistlib.InvalidFileException as error:
@@ -72,11 +100,10 @@ def read_plist_bytes(data: bytes, source: str) -> dict[str, Any]:
 
 
 def read_plist_file(path: Path) -> dict[str, Any]:
-	try:
-		return read_plist_bytes(path.read_bytes(), str(path))
-	except OSError as error:
-		fail(f"cannot read {path}: {error}")
-	return {}
+	return read_plist_bytes(
+		read_bounded_file(path, max_bytes=MAX_PLIST_BYTES, source=str(path)),
+		str(path),
+	)
 
 
 def decode_public_key(value: object, *, source: str) -> bytes:
@@ -162,10 +189,32 @@ def validate_app(
 	)
 
 	framework = path / "Contents/Frameworks/Sparkle.framework"
+	versions_root = framework / "Versions"
 	current_link = framework / "Versions/Current"
-	if not current_link.is_symlink() or current_link.readlink() != Path("B"):
-		fail("Sparkle Versions/Current must point to B")
-	version_root = framework / "Versions/B"
+	if not current_link.is_symlink():
+		fail("Sparkle Versions/Current must be a symbolic link")
+	current_target = current_link.readlink()
+	if (
+		current_target.is_absolute()
+		or len(current_target.parts) != 1
+		or current_target.name in ("", ".", "..", "Current")
+		or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", current_target.name) is None
+	):
+		fail("Sparkle Versions/Current must name one direct Versions child")
+	version_root = versions_root / current_target
+	try:
+		resolved_versions = versions_root.resolve(strict=True)
+		resolved_version = version_root.resolve(strict=True)
+	except OSError as error:
+		fail(f"Sparkle Versions/Current target cannot be resolved: {error}")
+	if resolved_version.parent != resolved_versions:
+		fail("Sparkle Versions/Current must resolve to one direct Versions child")
+	if version_root.is_symlink() or not version_root.is_dir():
+		fail("Sparkle Versions/Current target must be one real directory")
+	actual_version_entries = {entry.name for entry in versions_root.iterdir()}
+	expected_version_entries = {"Current", current_target.name}
+	if actual_version_entries != expected_version_entries:
+		fail("Sparkle Versions must contain only Current and its selected version")
 	for relative_path in (
 		"Sparkle",
 		"Autoupdate",
@@ -175,16 +224,157 @@ def validate_app(
 	):
 		if not (version_root / relative_path).exists():
 			fail(f"embedded Sparkle code is missing: {relative_path}")
+	expected_nested_bundles = {
+		version_root / "Updater.app",
+		version_root / "XPCServices/Installer.xpc",
+		version_root / "XPCServices/Downloader.xpc",
+	}
+	actual_nested_bundles = {
+		nested
+		for suffix in ("*.app", "*.xpc")
+		for nested in version_root.rglob(suffix)
+		if nested.is_dir()
+	}
+	if actual_nested_bundles != expected_nested_bundles:
+		fail("embedded Sparkle nested code graph is not the exact known graph")
 	framework_plist = read_plist_file(version_root / "Resources/Info.plist")
 	validate_sparkle_plist(framework_plist, sparkle_version=sparkle_version)
 
 
-def zip_read(archive: zipfile.ZipFile, member: str) -> bytes:
+def zip_read(
+	archive: zipfile.ZipFile,
+	member: str,
+	*,
+	max_bytes: int,
+) -> bytes:
 	try:
-		return archive.read(member)
+		info = archive.getinfo(member)
 	except KeyError:
 		fail(f"release archive is missing {member}")
+	if info.file_size > max_bytes:
+		fail(f"archived {member} exceeds the {max_bytes}-byte limit")
+	try:
+		data = archive.read(info)
+	except (OSError, RuntimeError, zipfile.BadZipFile) as error:
+		fail(f"cannot read archived {member}: {error}")
+	if len(data) > max_bytes:
+		fail(f"archived {member} exceeds the {max_bytes}-byte limit")
+	return data
 	return b""
+
+
+def zip_require_member(archive: zipfile.ZipFile, member: str) -> None:
+	try:
+		archive.getinfo(member)
+	except KeyError:
+		fail(f"release archive is missing {member}")
+
+
+def validate_zip_directory(archive: zipfile.ZipFile) -> None:
+	infos = archive.infolist()
+	if len(infos) > MAX_ZIP_ENTRIES:
+		fail(f"release archive exceeds the {MAX_ZIP_ENTRIES}-entry limit")
+	names = [info.filename for info in infos]
+	if len(set(names)) != len(names):
+		fail("release archive contains duplicate member names")
+	total_uncompressed = 0
+	total_metadata = len(archive.comment)
+	for info in infos:
+		filename_bytes = info.filename.encode("utf-8")
+		if len(filename_bytes) > MAX_ZIP_PATH_BYTES:
+			fail(f"release archive member path exceeds {MAX_ZIP_PATH_BYTES} bytes")
+		path = PurePosixPath(info.filename)
+		if (
+			not info.filename
+			or path.is_absolute()
+			or any(part in ("", ".", "..") for part in path.parts)
+		):
+			fail(f"release archive contains an unsafe member path: {info.filename!r}")
+		if info.flag_bits & 0x1:
+			fail(f"release archive member must not be encrypted: {info.filename}")
+		total_uncompressed += info.file_size
+		if total_uncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+			fail(
+				"release archive exceeds the "
+				f"{MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES}-byte uncompressed limit"
+			)
+		total_metadata += len(filename_bytes) + len(info.extra) + len(info.comment)
+		if total_metadata > MAX_ZIP_METADATA_BYTES:
+			fail(f"release archive metadata exceeds the {MAX_ZIP_METADATA_BYTES}-byte limit")
+
+
+def zip_current_version(archive: zipfile.ZipFile) -> str:
+	member = f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/Current"
+	try:
+		info = archive.getinfo(member)
+	except KeyError:
+		fail("release archive is missing Sparkle Versions/Current")
+	mode = info.external_attr >> 16
+	if not stat.S_ISLNK(mode):
+		fail("archived Sparkle Versions/Current must be a symbolic link")
+	if info.file_size > MAX_ZIP_SYMLINK_TARGET_BYTES:
+		fail("archived Sparkle Versions/Current target exceeds the size limit")
+	try:
+		target = zip_read(
+			archive,
+			member,
+			max_bytes=MAX_ZIP_SYMLINK_TARGET_BYTES,
+		).decode("utf-8")
+	except (KeyError, UnicodeDecodeError) as error:
+		fail(f"archived Sparkle Versions/Current target is invalid: {error}")
+	target_path = PurePosixPath(target)
+	if (
+		target_path.is_absolute()
+		or len(target_path.parts) != 1
+		or target_path.name in ("", ".", "..", "Current")
+		or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", target_path.name) is None
+	):
+		fail("archived Sparkle Versions/Current must name one direct Versions child")
+	prefix = (
+		f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/"
+		f"{target_path.name}/"
+	)
+	if not any(name.startswith(prefix) for name in archive.namelist()):
+		fail("archived Sparkle Versions/Current target does not exist")
+	versions_prefix = f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/"
+	actual_version_entries = {
+		remainder.split("/", maxsplit=1)[0]
+		for name in archive.namelist()
+		if name.startswith(versions_prefix)
+		for remainder in (name.removeprefix(versions_prefix),)
+		if remainder
+	}
+	if actual_version_entries != {"Current", target_path.name}:
+		fail("archived Sparkle Versions must contain only Current and its selected version")
+	return target_path.name
+
+
+def validate_zip_nested_code_graph(
+	archive: zipfile.ZipFile,
+	*,
+	current_version: str,
+) -> None:
+	prefix = (
+		f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/"
+		f"{current_version}/"
+	)
+	expected = {
+		f"{prefix}Updater.app",
+		f"{prefix}XPCServices/Installer.xpc",
+		f"{prefix}XPCServices/Downloader.xpc",
+	}
+	actual: set[str] = set()
+	for name in archive.namelist():
+		if not name.startswith(prefix):
+			continue
+		parts = PurePosixPath(name).parts
+		for index, part in enumerate(parts):
+			if part.endswith((".app", ".xpc")):
+				candidate = "/".join(parts[: index + 1])
+				if candidate.startswith(prefix):
+					actual.add(candidate)
+	if actual != expected:
+		fail("archived Sparkle nested code graph is not the exact known graph")
 
 
 def validate_archive_bundle(
@@ -199,6 +389,7 @@ def validate_archive_bundle(
 		fail(f"release archive must be an existing {ARCHIVE_NAME}: {path}")
 	try:
 		with zipfile.ZipFile(path) as archive:
+			validate_zip_directory(archive)
 			names = set(archive.namelist())
 			archive_roots = {
 				name.split("/", maxsplit=1)[0]
@@ -210,7 +401,11 @@ def validate_archive_bundle(
 					f"release archive root must be only {APP_NAME}: {sorted(archive_roots)}"
 				)
 			main_plist = read_plist_bytes(
-				zip_read(archive, f"{APP_NAME}/Contents/Info.plist"),
+				zip_read(
+					archive,
+					f"{APP_NAME}/Contents/Info.plist",
+					max_bytes=MAX_PLIST_BYTES,
+				),
 				f"{path}:{APP_NAME}/Contents/Info.plist",
 			)
 			validate_main_plist(
@@ -219,7 +414,12 @@ def validate_archive_bundle(
 				repository=repository,
 				sparkle_public_key=sparkle_public_key,
 			)
-			zip_read(archive, f"{APP_NAME}/Contents/MacOS/{APP_EXECUTABLE}")
+			zip_require_member(archive, f"{APP_NAME}/Contents/MacOS/{APP_EXECUTABLE}")
+			current_version = zip_current_version(archive)
+			validate_zip_nested_code_graph(
+				archive,
+				current_version=current_version,
+			)
 			for relative_path in (
 				"Sparkle",
 				"Autoupdate",
@@ -227,18 +427,21 @@ def validate_archive_bundle(
 				"XPCServices/Installer.xpc/Contents/Info.plist",
 				"XPCServices/Downloader.xpc/Contents/Info.plist",
 			):
-				zip_read(
+				zip_require_member(
 					archive,
-					f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/B/"
+					f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/"
+					f"{current_version}/"
 					f"{relative_path}",
 				)
 			framework_plist = read_plist_bytes(
 				zip_read(
 					archive,
-					f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/B/"
+					f"{APP_NAME}/Contents/Frameworks/Sparkle.framework/Versions/"
+					f"{current_version}/"
 					"Resources/Info.plist",
+					max_bytes=MAX_PLIST_BYTES,
 				),
-				f"{path}:Sparkle.framework/Versions/B/Resources/Info.plist",
+				f"{path}:Sparkle.framework/Versions/{current_version}/Resources/Info.plist",
 			)
 			validate_sparkle_plist(framework_plist, sparkle_version=sparkle_version)
 	except zipfile.BadZipFile as error:
@@ -309,9 +512,11 @@ def validate_appcast(
 ) -> None:
 	if path.name != APPCAST_NAME or not path.is_file():
 		fail(f"appcast must be an existing {APPCAST_NAME}: {path}")
+	data = read_bounded_file(path, max_bytes=MAX_APPCAST_BYTES, source=str(path))
+	reject_xml_declarations(data, source="appcast")
 	try:
-		root = ET.parse(path).getroot()
-	except (OSError, ET.ParseError) as error:
+		root = ET.fromstring(data)
+	except ET.ParseError as error:
 		fail(f"invalid appcast XML: {error}")
 	if root.tag != "rss" or root.get("version") != "2.0":
 		fail("appcast root must be RSS 2.0")

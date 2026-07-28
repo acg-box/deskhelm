@@ -17,7 +17,7 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      sparkle_revision: ${{ steps.source.outputs.sparkle_revision }}
       sparkle_version: ${{ steps.source.outputs.sparkle_version }}
       tag_commit: ${{ steps.source.outputs.tag_commit }}
       version: ${{ steps.source.outputs.version }}
@@ -39,6 +40,12 @@ jobs:
       - name: Fetch canonical main
         run: git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
       - name: Validate tag, versions, and source commit
         id: source
         env:
@@ -48,7 +55,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          script/release/validate-release-source.py \
+          node scripts/release/validate-release-source.ts \
             --tag "$RELEASE_TAG" \
             --event-commit "$RELEASE_EVENT_COMMIT" \
             --repository "$RELEASE_REPOSITORY" \
@@ -89,6 +96,12 @@ jobs:
         with:
           cache: true
           rustflags: ''
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
 
       - name: Install cargo-make
         uses: taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd # v2.84.1
@@ -145,8 +158,14 @@ jobs:
           name: deskhelm-aarch64-apple-darwin
           path: artifacts
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
       - name: Create, validate, and publish GitHub draft
         env:
           GH_TOKEN: ${{ github.token }}
           DESKHELM_RELEASE_INPUT_DIR: artifacts
-        run: script/release/publish-github-release.sh
+        run: node scripts/release/publish-github-release.ts

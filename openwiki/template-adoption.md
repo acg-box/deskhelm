@@ -36,7 +36,7 @@ That replacement changes the risk profile: product correctness now depends on co
 
 ## Release Reconciliation
 
-`.github/workflows/release.yml` now validates an annotated stable tag against canonical `main`, builds and signs `DeskHelm.app` on Apple Silicon with the project's free Apple Development certificate, signs the release archive for its Sparkle appcast, validates a private GitHub draft, and then publishes the three macOS release assets. The app uses Hardened Runtime without notarization. Linux/Windows CLI archives and crates.io publication are no longer part of the release.
+`.github/workflows/release.yml` validates an annotated stable tag against canonical `main`, serializes all stable releases, builds and signs `DeskHelm.app` on Apple Silicon with the project's free Apple Development certificate, signs the release archive for its Sparkle appcast, repairs and validates only a same-tag private GitHub draft, rechecks source and stable-version monotonicity, and then publishes the three macOS release assets. The app uses Hardened Runtime without notarization. Linux/Windows CLI archives and crates.io publication are no longer part of the release.
 
 Any future package rename must update the app directory and manifest, root metadata and lockfiles, README commands, workflow and release-script selectors, executable/archive/appcast names, and owning OpenWiki pages as one change. See [Operations](operations.md#release-pipeline) for the current exact flow.
 

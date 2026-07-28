@@ -315,6 +315,7 @@ dependencies = [
 
 [tasks.test-release]
 workspace = false
+# This entrypoint includes the Node-native TypeScript publisher contract tests.
 command = "./script/release/self-check.py"
 
 [tasks.test-macos-release]

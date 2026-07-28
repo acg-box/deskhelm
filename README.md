@@ -192,12 +192,27 @@ The release workflow starts only for an annotated `vX.Y.Z` tag. The tag version
 must match the workspace version, and its commit must be reachable from the
 canonical `main` branch. The workflow validates on Linux, builds and signs the
 app on `macos-26`, then returns to Linux to validate a GitHub draft before
-it publishes the draft. It has no manual preparation or dry-run workflow.
+it publishes the draft. All tag releases share one non-canceling concurrency
+group. Before it changes a draft and again immediately before publication, the
+publisher checks the remote annotated tag, `main` ancestry, and every published
+stable version. A release must advance the complete stable history.
+
+The Node 24 TypeScript publisher validates local artifacts before its first
+GitHub mutation. It repairs only a same-tag private draft by replacing all draft
+assets with the exact release triplet. After the final source and version checks,
+it downloads and validates the exact draft bytes again as the last operation
+before publication. It then fetches the public release and validates its
+downloaded bytes. A retry of an already public same-tag release is read-only and
+validates the downloaded public bytes. The publisher also supports a
+credential-free `--dry-run` that performs local validation only. There is no
+manual preparation, `workflow_dispatch`, or dry-run workflow.
 
 The checked-in `script/release/sparkle-public-ed-key.txt` contains DeskHelm's
 public Sparkle key. Configure the matching private key as the repository secret
-`DESKHELM_SPARKLE_PRIVATE_ED_KEY`, and make these organization secrets
-available to the repository:
+`DESKHELM_SPARKLE_PRIVATE_ED_KEY`. The key verifier accepts the Sparkle 2.9.4
+32-byte seed and legacy 96-byte secret formats, and rejects a private secret
+whose public key does not match the checked-in key. Make these organization
+secrets available to the repository:
 
 - `APPLE_CERTIFICATE_P12_BASE64`
 - `APPLE_CERTIFICATE_PASSWORD`

@@ -30,12 +30,22 @@ guard let privateKeyData = Data(base64Encoded: trimmedPrivateKey) else {
 	fail("Sparkle private key is not valid base64")
 }
 
-do {
-	let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyData)
-	let derivedPublicKey = privateKey.publicKey.rawRepresentation
-	guard derivedPublicKey == expectedPublicKeyData else {
-		fail("DeskHelm Sparkle private key does not match the app public key")
+let actualPublicKey: Data
+if privateKeyData.count == 32 {
+	do {
+		let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyData)
+		actualPublicKey = privateKey.publicKey.rawRepresentation
+	} catch {
+		fail("Sparkle private key seed is invalid")
 	}
-} catch {
-	fail("Sparkle private key is invalid")
+} else if privateKeyData.count == 96 {
+	// Sparkle's legacy format is a 64-byte orlp/Ed25519 private key followed by
+	// its 32-byte public key.
+	actualPublicKey = privateKeyData.suffix(32)
+} else {
+	fail("Sparkle private key must decode to a 32-byte seed or 96-byte legacy secret")
+}
+
+guard actualPublicKey == expectedPublicKeyData else {
+	fail("DeskHelm Sparkle private key does not match the app public key")
 }
