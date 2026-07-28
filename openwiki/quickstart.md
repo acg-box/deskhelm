@@ -36,7 +36,7 @@ Build the Rust display core and Swift package, stage `DeskHelm.app`, and open it
 ./script/build_and_run.sh
 ```
 
-DeskHelm normally runs with accessory activation policy and `LSUIElement=true`, so it has no Dock icon. Select its square, image-only control-deck status icon to open the native menu. Choose **Settings…**, or press Command-, while DeskHelm is active, to open the reusable Settings window; Command-Q quits. Its compact toolbar switches among Display, Volume Keys, General, and About panes.
+DeskHelm keeps accessory activation policy and sets `LSUIElement=true`, so it has no Dock icon. Settings and update windows do not change that policy. Select its square, image-only control-deck status icon to open the native menu. Choose **Settings…**, or press Command-, while DeskHelm is active, to open the reusable Settings window; Command-Q quits. Its compact toolbar switches among Display, Volume Keys, General, and About panes.
 
 The Display pane starts a hardware refresh when it appears. The first successful refresh creates a verified display session and enables the volume control. Pointer dragging updates the UI immediately and sends coalesced latest-target preview writes through that session; arrow keys and the VoiceOver adjustable action move by one point. A preview does not replace the confirmed value. DeskHelm reads the final target back after 150 ms without new input, or immediately when a drag ends. Selecting refresh during preview or confirmation retains one request and reads when the active work finishes. A mismatch triggers one exact write and readback. If recovery cannot read the display, DeskHelm clears the confirmed state and disables adjustment instead of restoring an unverified old value.
 
@@ -46,7 +46,7 @@ Confirm that the launched app created its AppKit status item:
 ./script/build_and_run.sh --verify
 ```
 
-This verifies app-owned native status-menu construction, not whether macOS has enough visible menu-bar space. To also open Settings and verify that AppKit made its window visible, key, main, on-screen, and toolbar-backed, run:
+This verifies app-owned native status-menu construction and the startup accessory state, not whether macOS has enough visible menu-bar space. To also open Settings and verify that AppKit kept the accessory policy and made its window visible, key, main, on-screen, and toolbar-backed, run:
 
 ```sh
 ./script/build_and_run.sh --verify-settings
@@ -56,7 +56,7 @@ Neither diagnostic proves toolbar interaction, Accessibility trust changes, perm
 
 ### Keyboard Volume Keys
 
-Keyboard volume control starts on every launch. If Accessibility access is missing, open **Settings > Volume Keys** and select **Grant**. DeskHelm opens the correct System Settings page and shows a floating guide with a draggable app chip; it does not request the native macOS Accessibility prompt. The guide closes when trust appears or when DeskHelm Settings closes. Each volume-up or volume-down press or system repeat moves the display by one point only when the current macOS default audio output is the one unique matching LG UltraGear route that Core Audio classifies as DisplayPort. The verified physical connection remains USB-C. Holding a key uses the existing macOS repeat events for continuous adjustment. DeskHelm coalesces rapid repeats into latest-target preview writes and confirms once after input stops. When Settings is not being presented, an app-owned transient HUD shows the projected value; opening Settings dismisses that HUD and suppresses a second overlay. Mute is not intercepted.
+Keyboard volume control starts on every launch. If Accessibility access is missing, open **Settings > Volume Keys** and select **Grant**. DeskHelm opens the correct System Settings page and shows a floating guide with a draggable app chip; it does not request the native macOS Accessibility prompt. The guide closes when trust appears or when DeskHelm Settings closes. Each volume-up or volume-down press or system repeat moves the display by one point only when the current macOS default audio output is the one unique matching LG UltraGear route that Core Audio classifies as DisplayPort. The verified physical connection remains USB-C. Holding a key uses the existing macOS repeat events for continuous adjustment. DeskHelm coalesces rapid repeats into latest-target preview writes and confirms once after input stops. An app-owned transient HUD shows the projected value, including while Settings is open. The HUD does not take keyboard focus from Settings. Mute is not intercepted.
 
 DeskHelm follows the macOS **Play feedback when volume is changed** preference. It plays the installed macOS volume cue through the same LG Core Audio endpoint after the final preview write is accepted and the key is released. A held key produces one release cue instead of one cue for every repeat. At maximum volume, feedback starts immediately and repeats about once per second until release. Holding Shift alone reverses the preference for that key sequence. A failed write, canceled sequence, or route change stays silent. This cue marks DDC/CI transport acceptance; the later readback remains authoritative. If the compatible system sound cannot be loaded, volume control continues without audible feedback.
 

@@ -52,7 +52,6 @@ final class VolumeKeyController {
   private var recoveryTask: Task<Void, Never>?
   private var isDisplayObservationStarted = false
   private var isStarted = false
-  private var shouldPresentHUD: @MainActor () -> Bool = { true }
   private var lastLevelUpdateUptime: TimeInterval?
   private lazy var monitor = monitorFactory(
     { [weak self] event, targetDeviceUID in
@@ -122,12 +121,6 @@ final class VolumeKeyController {
     requestEnable()
   }
 
-  func setHUDPresentationPolicy(
-    _ policy: @escaping @MainActor () -> Bool
-  ) {
-    shouldPresentHUD = policy
-  }
-
   func accessibilityPermissionDidChange(
     _ permissionState: AccessibilityPermissionState
   ) {
@@ -139,10 +132,6 @@ final class VolumeKeyController {
     case .required:
       suspendForMissingPermission()
     }
-  }
-
-  func dismissHUD() {
-    hud.invalidate()
   }
 
   func invalidate() {
@@ -317,9 +306,7 @@ final class VolumeKeyController {
       store.updateDraft(Double(target))
       store.queueDraftApply()
     }
-    if shouldPresentHUD() {
-      hud.show(level: target, updateUptime: updateUptime)
-    }
+    hud.show(level: target, updateUptime: updateUptime)
 
     feedbackCoordinator.observePress(
       event,
@@ -381,7 +368,7 @@ final class VolumeKeyController {
     monitor.stop()
     lastLevelUpdateUptime = nil
     state.update(to: .unavailable(message))
-    if showHUD && shouldPresentHUD() {
+    if showHUD {
       hud.show(error: message)
     }
     logger.error(
@@ -435,9 +422,7 @@ final class VolumeKeyController {
     monitor.stop()
     lastLevelUpdateUptime = nil
     state.update(to: .failed(message))
-    if shouldPresentHUD() {
-      hud.show(error: message)
-    }
+    hud.show(error: message)
     logger.error("Keyboard volume control stopped: \(message, privacy: .public)")
   }
 }
