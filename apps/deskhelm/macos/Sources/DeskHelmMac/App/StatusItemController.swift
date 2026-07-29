@@ -77,16 +77,6 @@ final class StatusItemController {
   private func configureMenu(updateTitle: String) {
     menu.autoenablesItems = false
 
-    let settingsItem = NSMenuItem(
-      title: "Settings…",
-      action: #selector(showSettings(_:)),
-      keyEquivalent: ","
-    )
-    settingsItem.keyEquivalentModifierMask = [.command]
-    settingsItem.target = self
-    settingsItem.isEnabled = true
-    menu.addItem(settingsItem)
-
     let updateItem = NSMenuItem(
       title: updateTitle,
       action: #selector(checkForUpdates(_:)),
@@ -98,8 +88,20 @@ final class StatusItemController {
 
     menu.addItem(.separator())
 
+    let settingsItem = NSMenuItem(
+      title: "Settings…",
+      action: #selector(showSettings(_:)),
+      keyEquivalent: ","
+    )
+    settingsItem.keyEquivalentModifierMask = [.command]
+    settingsItem.target = self
+    settingsItem.isEnabled = true
+    menu.addItem(settingsItem)
+
+    menu.addItem(.separator())
+
     let quitItem = NSMenuItem(
-      title: "Quit DeskHelm",
+      title: "Quit",
       action: #selector(quit(_:)),
       keyEquivalent: "q"
     )
