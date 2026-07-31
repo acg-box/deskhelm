@@ -41,12 +41,7 @@ final class StatusItemController {
       throw StatusItemError.buttonUnavailable
     }
 
-    guard let statusIcon = DeskHelmStatusIcon.makeImage() else {
-      NSStatusBar.system.removeStatusItem(statusItem)
-      throw StatusItemError.iconUnavailable
-    }
-
-    configureStatusButton(button, image: statusIcon)
+    configureStatusButton(button, image: DeskHelmStatusIcon.makeImage())
     configureMenu(updateTitle: updateTitle)
     statusItem.menu = menu
     statusItem.isVisible = true
@@ -129,14 +124,11 @@ final class StatusItemController {
 
 private enum StatusItemError: LocalizedError {
   case buttonUnavailable
-  case iconUnavailable
 
   var errorDescription: String? {
     switch self {
     case .buttonUnavailable:
       "macOS did not provide a button for the DeskHelm status item."
-    case .iconUnavailable:
-      "macOS does not provide the control-deck symbol used by DeskHelm."
     }
   }
 }
