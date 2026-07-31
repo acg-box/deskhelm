@@ -121,7 +121,7 @@ Sources: `apps/deskhelm/src/ffi.rs`, `apps/deskhelm/macos/Sources/CDeskHelm/incl
 
 `DeskHelmMacMain` starts `NSApplication` with `.accessory` activation policy. The staged bundle also sets `LSUIElement=true`. Settings and update windows keep the accessory policy, so DeskHelm has no Dock icon. `AppDelegate` constructs the shared `VolumeStore`, keyboard-volume controller, Accessibility and launch-at-login state owners, software updater, reusable `SettingsWindowController`, and `StatusItemController`.
 
-`StatusItemController` owns a square `NSStatusItem` and native `NSMenu`. The image-only status-bar button has no text title. `DeskHelmStatusIcon` configures the system `slider.vertical.3` symbol as a 15-point medium-weight template image. The menu exposes Settings, update or release navigation, and Quit. The app also installs matching application-menu commands, including Command-, and Command-Q.
+`StatusItemController` owns a square `NSStatusItem` and native `NSMenu`. The image-only status-bar button has no text title. `DeskHelmStatusIcon` draws an 18-by-17-point template image with a rounded display outline, a centered horizontal fader, and a compact stand. The menu exposes Settings, update or release navigation, and Quit. The app also installs matching application-menu commands, including Command-, and Command-Q.
 
 `SettingsWindowController` owns one retained titled, closable window hosting `DeskHelmSettingsView`. Presenting it refreshes system permission and login-item state, activates DeskHelm without changing the accessory policy, and makes the Settings window key and main. Its fixed-width, icon-only compact toolbar selects four panes and remembers the last selection in `UserDefaults`:
 
